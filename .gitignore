@@ -1,1 +1,16 @@
+# Runtime / generated
+tor-data/
+*.log
+*.tmp
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Optional secrets/config (falls vorhanden)
+*.env
+.env
+rpc-config.php
 
