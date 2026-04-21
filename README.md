@@ -2,6 +2,10 @@
 
 Public Electrum endpoint over Tor, privacy-first and self-hosted.
 
+## Status
+
+http://yfo2ys4ddwlwkshcdrfr2kndhe7c3hutpcvqyiiwbm2djddjmm2dj4id.onion/
+
 ## Endpoint
 
 - **Host:** `yfo2ys4ddwlwkshcdrfr2kndhe7c3hutpcvqyiiwbm2djddjmm2dj4id.onion`
