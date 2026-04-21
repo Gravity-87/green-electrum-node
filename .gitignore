@@ -1,5 +1,6 @@
 # Runtime / generated
 tor-data/
+certs/
 *.log
 *.tmp
 
