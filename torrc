@@ -1,0 +1,9 @@
+HiddenServiceDir /var/lib/tor/hidden_service
+
+HiddenServicePort 80 web:80
+
+# Electrum (Host-IP im Docker-Netz)
+HiddenServicePort 50001 172.17.0.1:50001
+HiddenServicePort 50002 172.17.0.1:50002
+
+Log notice stdout

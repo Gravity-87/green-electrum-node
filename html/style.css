@@ -1,0 +1,591 @@
+:root {
+  --bg: #050805;
+  --bg-soft: #0a120a;
+  --text: #eaffea;
+  --muted: rgba(255, 255, 255, 0.7);
+  --muted-2: rgba(255, 255, 255, 0.55);
+
+  --accent: #4ed440;
+  --accent-2: #6aff5a;
+
+  --color-red: #ff4747;
+  --color-yellow: #ffd700;
+  --color-green: #4ed440;
+
+  --card-bg: linear-gradient(
+    to bottom right,
+    rgba(255, 255, 255, 0.035),
+    rgba(255, 255, 255, 0.02)
+  );
+  --card-border: rgba(255, 255, 255, 0.1);
+
+  --radius: 14px;
+  --gap: 16px;
+}
+
+/* =========================
+   BASE / LAYOUT
+========================= */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at top, var(--bg-soft) 0%, var(--bg) 40%);
+  color: var(--text);
+  font-family: system-ui, sans-serif;
+}
+
+.container {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 18px 16px 36px;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) minmax(430px, 1.1fr);
+  gap: var(--gap);
+  align-items: start;
+}
+
+.secondary-grid {
+  margin-top: var(--gap);
+  grid-template-columns: 1fr 1fr;
+  margin-bottom: 8px;
+}
+
+@media (max-width: 980px) {
+  .grid-2,
+  .secondary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================
+   HEADER
+========================= */
+
+.ascii {
+  text-align: center;
+  color: lightgreen;
+  font-size: clamp(8px, 0.56vw, 10px);
+  line-height: 1.02;
+  margin: 0 0 10px;
+  opacity: 0.86;
+  filter: drop-shadow(0 0 8px rgba(78, 212, 64, 0.15));
+}
+
+.mobile-header {
+  display: none;
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.mobile-header h1 {
+  color: var(--accent);
+  font-size: 28px;
+  margin: 0;
+  text-shadow: 0 0 10px rgba(78, 212, 64, 0.5);
+}
+
+.mobile-header .subtitle {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+@media (max-width: 800px) {
+  .mobile-header {
+    display: block;
+  }
+
+  .desktop-only {
+    display: none !important;
+  }
+}
+
+/* =========================
+   TOP STATUS
+========================= */
+
+.top-status {
+  text-align: center;
+  margin: 6px 0 14px;
+  font-size: 14px;
+  opacity: 0.9;
+}
+
+.top-status #status-text {
+  display: inline-block;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* =========================
+   CARDS
+========================= */
+
+.card,
+.status-box,
+.connection-box {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  padding: 0;
+  overflow: hidden;
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(6px);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+/* leichte Hervorhebung Connect */
+.connection-box {
+  border-color: rgba(78, 212, 64, 0.3);
+}
+
+/* Card sections */
+.card-head,
+.card-body,
+.card-foot {
+  padding: 14px 16px;
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.card-body {
+  padding-top: 12px;
+}
+
+.card-foot {
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.01);
+  padding-top: 10px;
+  padding-bottom: 12px;
+}
+
+/* Hover nur auf Geräten mit echter Maus */
+@media (hover: hover) and (pointer: fine) {
+  .status-box:hover,
+  .connection-box:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+  }
+}
+
+@media (hover: none) {
+  .status-box:hover,
+  .connection-box:hover {
+    transform: none;
+    box-shadow:
+      0 4px 12px rgba(0, 0, 0, 0.25),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+}
+
+/* =========================
+   TYPOGRAPHY
+========================= */
+
+h3 {
+  font-size: 1.05rem;
+  margin: 0 0 10px;
+  color: rgba(255, 255, 255, 0.9);
+  letter-spacing: 0.2px;
+}
+
+.card-head h3 {
+  margin: 0;
+}
+
+h4 {
+  margin: 2px 0 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  opacity: 0.82;
+}
+
+.meta {
+  font-size: 0.95rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.meta strong {
+  color: #fff;
+}
+
+/* Node stat rows */
+.stat-list {
+  display: grid;
+  gap: 8px;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.stat-row span {
+  color: var(--muted);
+}
+
+.stat-row strong {
+  color: #fff;
+  font-weight: 600;
+}
+
+/* =========================
+   CONNECT CARD PARTS
+========================= */
+
+.conn-section {
+  margin-bottom: 16px;
+}
+
+.conn-label {
+  font-size: 12px;
+  opacity: 0.62;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.quick-setup,
+.conn-meta,
+.hero-inline,
+.footer,
+.infra-note {
+  font-size: 12px;
+  color: var(--muted-2);
+  text-align: center;
+}
+
+/* =========================
+   STATUS DOT + PULSE
+========================= */
+
+.dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: #666;
+  vertical-align: middle;
+}
+
+.dot.online {
+  background: var(--accent) !important;
+  animation: dotPulse 1.5s infinite !important;
+}
+
+.dot.offline {
+  background: var(--color-red) !important;
+  animation: none !important;
+}
+
+@keyframes dotPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(78, 212, 64, 0.75);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(78, 212, 64, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(78, 212, 64, 0);
+  }
+}
+
+/* =========================
+   BUTTONS
+========================= */
+
+button {
+  background: var(--accent);
+  color: #002200;
+  border: none;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+button:hover {
+  background: var(--accent-2);
+  box-shadow: 0 0 12px rgba(78, 212, 64, 0.6);
+}
+
+button:active {
+  transform: scale(0.97);
+}
+
+.connection-box button,
+.donation-box button {
+  min-width: 180px;
+}
+
+/* =========================
+   CODE BLOCKS
+========================= */
+
+code {
+  display: block;
+  background: #020402;
+  padding: 9px 10px;
+  border-radius: 6px;
+  margin: 10px 0;
+  word-break: break-all;
+  border: 1px solid rgba(78, 212, 64, 0.2);
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+/* =========================
+   DIVIDERS
+========================= */
+
+hr {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin: 10px 0;
+}
+
+.divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.07);
+  margin: 10px 0;
+}
+
+.mini-separator {
+  text-align: center;
+}
+.mini-separator hr {
+  width: 50%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* =========================
+   FEES
+========================= */
+
+.fee-row {
+  margin-bottom: 6px;
+}
+
+.fee-bar-wrap {
+  display: inline-block;
+  width: 86px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  margin: 0 8px;
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.fee-bar {
+  display: block;
+  height: 6px;
+  border-radius: 4px;
+  transition: width 0.4s ease;
+}
+
+.fee-percent {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.fee-fast {
+  background: var(--color-red);
+}
+.fee-medium {
+  background: var(--color-yellow);
+}
+.fee-slow {
+  background: var(--color-green);
+}
+
+/* =========================
+   UPTIME
+========================= */
+
+#uptime {
+  margin-top: 10px;
+}
+
+.uptime-dot {
+  width: 6px;
+  height: 18px;
+  display: inline-block;
+  margin-right: 2px;
+  border-radius: 2px;
+  background: #1a2a1a;
+}
+
+/* =========================
+   QR
+========================= */
+
+.qr-wrap {
+  display: flex;
+  justify-content: center;
+  position: relative;
+}
+
+.qr-code {
+  width: 168px;
+  height: 168px;
+  background: #fff;
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.qr-hint {
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted-2);
+  margin-top: 6px;
+}
+
+/* =========================
+   MISC
+========================= */
+
+.last-updated {
+  margin-top: 10px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  letter-spacing: 0.5px;
+}
+
+.history {
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
+}
+.history div {
+  padding-left: 2px;
+}
+
+.infra-box,
+.donation-box {
+  margin: 0;
+  max-width: none;
+}
+
+.donation-box {
+  text-align: center;
+}
+.donation-box p {
+  margin: 0 0 10px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+/* Terminal cursor */
+.cursor {
+  display: inline-block;
+  width: 10px;
+  margin-left: 4px;
+  color: var(--accent);
+  animation: blink 1s step-start infinite;
+}
+.cursor::after {
+  content: "_";
+}
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* =========================
+   TOAST
+========================= */
+
+#toast {
+  position: fixed;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  padding: 12px 18px;
+  border-radius: 8px;
+  font-size: 14px;
+  color: white;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.3s ease;
+  z-index: 9999;
+}
+
+#toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+#toast.success {
+  background: #2ecc71;
+}
+#toast.error {
+  background: #e74c3c;
+}
+#toast.warning {
+  background: #f1c40f;
+  color: black;
+}
+#toast.info {
+  background: #3498db;
+}
+
+/* =========================
+   FOOTER / NO OVERLAP FIX
+========================= */
+
+.footer {
+  display: block;
+  margin-top: 20px;
+  padding: 12px 0 6px;
+  text-align: center;
+  background: var(--bg);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  position: relative;
+  z-index: 20;
+}
+
+/* WICHTIG: Sticky auf Desktop deaktiviert (dein funktionaler Fix) */
+@media (min-width: 981px) {
+  .connection-box {
+    position: static !important;
+  }
+}
+
+/* Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

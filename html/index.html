@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Green Electrum – fully synced</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="container">
+
+<!-- HEADER -->
+<pre class="ascii desktop-only">
+
+ ██████╗ ██████╗ ███████╗███████╗███╗   ██╗    ███████╗██╗     ███████╗ ██████╗████████╗██████╗ ██╗   ██╗███╗   ███╗
+██╔════╝ ██╔══██╗██╔════╝██╔════╝████╗  ██║    ██╔════╝██║     ██╔════╝██╔════╝╚══██╔══╝██╔══██╗██║   ██║████╗ ████║
+██║  ███╗██████╔╝█████╗  █████╗  ██╔██╗ ██║    █████╗  ██║     █████╗  ██║        ██║   ██████╔╝██║   ██║██╔████╔██║
+██║   ██║██╔══██╗██╔══╝  ██╔══╝  ██║╚██╗██║    ██╔══╝  ██║     ██╔══╝  ██║        ██║   ██╔══██╗██║   ██║██║╚██╔╝██║
+╚██████╔╝██║  ██║███████╗███████╗██║ ╚████║    ███████╗███████╗███████╗╚██████╗   ██║   ██║  ██║╚██████╔╝██║ ╚═╝ ██║
+ ╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═══╝    ╚══════╝╚══════╝╚══════╝ ╚═════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝
+
+</pre>
+
+<div class="mobile-header">
+	<h1>⚡ Green Electrum Node<span class="cursor"></span></h1>
+	<div class="subtitle">Tor-ready • no tracking • open access</div>
+</div>
+
+<!-- Top Status -->
+<div class="top-status">
+    <span id="status-dot" class="dot"></span>
+    <strong id="status-text">checking...</strong>
+</div>
+
+<!-- HERO -->
+<div class="grid-2">
+
+
+<!-- NODE-STATUS CARD -->
+<div class="status-box node-status-card card">
+  <div class="card-head">
+    <h3>⚡🧅 Node Status</h3>
+    <div class="last-updated" id="lastUpdated">
+      Last updated: <span id="lastUpdatedTime">–</span>
+    </div>
+  </div>
+
+  <div class="card-body">
+    <div class="meta stat-list">
+      <div class="stat-row"><span>⚡ Latency</span><strong><span id="latency">...</span> ms</strong></div>
+      <div class="stat-row"><span>🕒 Last seen</span><strong id="lastseen">...</strong></div>
+      <div class="stat-row"><span>⛓️ Blockheight</span><strong id="blockheight">...</strong></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="history" id="history"></div>
+
+    <div class="divider"></div>
+
+    <div class="meta">
+      <strong>Electrum</strong><br>
+      Version: <span id="srv-version">...</span><br>
+      Protocol: <span id="srv-protocol">...</span>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="meta">
+      <strong>Fees</strong>
+      <div class="fee-hint">Fees are dynamic • higher = faster confirmation</div>
+      <div class="fee-row"><strong id="fee-slow"></strong></div>
+      <div class="fee-row"><strong id="fee-medium"></strong></div>
+      <div class="fee-row"><strong id="fee-fast"></strong></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="meta">
+      <strong>Uptime</strong>
+      <div id="uptime"></div>
+    </div>
+  </div>
+</div>
+
+
+<!-- CONNECT CARD -->
+<div class="connection-box card">
+  <div class="card-head">
+    <h3>🔌 Connect</h3>
+  </div>
+
+  <div class="card-body">
+    <!-- MANUAL SETUP -->
+    <div class="conn-section">
+      <div class="conn-label">Manual setup (Electrum desktop)</div>
+
+      <code id="onion" onclick="copyOnion(this)">
+        yfo2ys4ddwlwkshcdrfr2kndhe7c3hutpcvqyiiwbm2djddjmm2dj4id.onion:50001:t
+      </code>
+
+      <button onclick="copyOnion(this)">Copy full address</button>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- QR / MOBILE -->
+    <div class="conn-section">
+      <div class="conn-label">Mobile / quick connect</div>
+
+      <div class="qr-wrap">
+        <img src="qrcode.png" class="qr-code" onclick="openElectrum()">
+      </div>
+
+      <div class="qr-hint">
+        Scan with wallet or open in Electrum
+      </div>
+    </div>
+  </div>
+
+  <div class="card-foot">
+    <div class="conn-meta">
+      Tor only • Port 50001 • TCP
+    </div>
+
+    <div class="quick-setup">
+      ⚡ Electrum → disable auto-connect → paste → done
+    </div>
+
+    <div class="mini-separator"><hr></div>
+
+    <div class="hero-inline">
+      Public endpoint • no tracking • no middleman
+    </div>
+  </div>
+</div>
+
+
+<!-- INFRA & DONATION -->
+<div class="grid-2 secondary-grid">
+  <div class="status-box infra-box card">
+    <div class="card-head">
+      <h3>🧱 Infrastructure</h3>
+    </div>
+
+    <div class="card-body">
+      <div class="meta">
+        Bitcoin Core: <strong id="btc-version">...</strong><br>
+        Sync Status: <strong id="btc-sync">...</strong><br>
+        Blockheight: <strong id="btc-height">...</strong>
+      </div>
+    </div>
+
+    <div class="card-foot">
+      <div class="infra-note">
+        Full node backend powering this Electrum server
+      </div>
+    </div>
+  </div>
+
+  <div class="status-box donation-box card">
+    <div class="card-head">
+      <h3>⚡ Supporting Green Electrum</h3>
+    </div>
+
+    <div class="card-body">
+      <h4>Powered by renewables</h4>
+      <p>
+        Life of node is fine<br>
+        with some sats & sunshine... ☀️
+      </p>
+
+      <code id="donate" onclick="copyDonate(this)">
+        bc1qgqyjywhhqvehu7fl62d2acmh35pshk75msa5nf
+      </code>
+
+      <button onclick="copyDonate(this)">Copy Address</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- FOOTER -->
+<div class="footer">
+    🔒 No logs • 🧅 Tor • ⚡ Self-hosted • privacy-first
+</div>
+
+
+</div>
+
+
+<!-- JavaScript-Bereich -->
+
+
+<script>
+const onion = "yfo2ys4ddwlwkshcdrfr2kndhe7c3hutpcvqyiiwbm2djddjmm2dj4id.onion";
+
+let lastUpdateTimestamp = null;
+let historyLog = [];
+
+/* =========================
+   INIT (einmal beim Laden)
+========================= */
+
+document.addEventListener("DOMContentLoaded", () => {
+    updateAll();
+    loadElectrum();
+    loadUptime();
+
+    setInterval(updateAll, 10000);
+    setInterval(loadElectrum, 15000);
+    setInterval(loadUptime, 30000);
+});
+
+/* ============================
+    TOAST System
+============================= */
+
+function showToast(message, type = "success") {
+    const toast = document.getElementById("toast");
+    if (!toast) return;
+
+    toast.innerText = message;
+
+    // Reset Klassen
+    toast.className = "";
+
+    // Basis + Typ
+    toast.classList.add("show", type);
+
+    setTimeout(() => {
+        toast.classList.remove("show");
+    }, 2200);
+}
+
+
+
+/* =========================
+   COPY
+========================= */
+
+function copyOnion(el) {
+    copyText(el.innerText.trim(), el);
+}
+
+function copyDonate(el) {
+    copyText(el.innerText.trim(), el);
+}
+
+function copyText(text, btn) {
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text);
+    } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+    }
+
+    if (btn.tagName === "BUTTON") {
+        const original = btn.innerText;
+        btn.innerText = "✓ Copied";
+        setTimeout(() => btn.innerText = original, 1500);
+    }
+
+    showToast("✓ Address copied", "success");
+}
+
+/* =========================
+   HELPERS
+========================= */
+
+function formatTime(ts) {
+    if (!ts) return "-";
+    return new Date(ts * 1000).toLocaleString();
+}
+
+function safeSet(id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.innerText = value ?? "-";
+}
+
+function updateLastUpdated() {
+    if (!lastUpdateTimestamp) return;
+
+    const seconds = Math.floor((Date.now() - lastUpdateTimestamp) / 1000);
+    const el = document.getElementById("lastUpdatedTime");
+
+    if (!el) return;
+
+    if (seconds < 60) {
+        el.textContent = seconds + "s ago";
+    } else {
+        const minutes = Math.floor(seconds / 60);
+        el.textContent = minutes + "m ago";
+    }
+}
+
+/* =========================
+   STATUS (nur Basisdaten!)
+========================= */
+
+async function updateAll() {
+    try {
+        const res = await fetch("status.php");
+        const data = await res.json();
+
+        safeSet("status-text", data.status);
+        safeSet("latency", data.latency);
+        safeSet("lastseen", formatTime(data.last_seen));
+
+        const dot = document.getElementById("status-dot");
+	if (dot) {
+		if (data.status === "online") {
+			dot.classList.add("online");
+ 			dot.classList.remove("offline");
+
+		    addHistory("Node online");
+
+		    // ⚠️ Warning bei hoher Latenz
+		    if (data.latency > 1000) {
+		        showToast("High latency – connection may be slow", "warning");
+		    }
+
+		} else {
+		    dot.classList.add("offline");
+		    dot.classList.remove("online");
+
+		    safeSet("status-text", "offline");
+		    addHistory("Node offline");
+		}
+	}
+
+    } catch (e) {
+	    console.error("STATUS FAIL:", e);
+	    showToast("Connection failed", "error");
+
+	    safeSet("status-text", "offline");
+	    addHistory("Connection error");
+	}
+}
+
+/* =========================
+   ELECTRUM (alle Details!)
+========================= */
+
+async function loadElectrum() {
+    try {
+        const res = await fetch("electrum.php");
+        const data = await res.json();
+
+        const statusEl = document.getElementById("srv-status");
+        if (statusEl) statusEl.innerText = data.status ?? "-";
+
+        if (data.status === "ok") {
+
+            safeSet("srv-version", data.version);
+            safeSet("srv-protocol", data.protocol);
+            safeSet("blockheight", data.blockheight);
+
+            const fast = data.fee_fast ?? null;
+            const medium = data.fee_medium ?? null;
+            const slow = data.fee_slow ?? null;
+
+            const maxFee = Math.max(fast || 1, medium || 1, slow || 1);
+
+		function setFee(id, value, symbol, tooltip, type) {
+		    const el = document.getElementById(id);
+		    if (!el) return;
+
+		    if (value === null || value === undefined) {
+		        el.innerText = "-";
+		        el.title = "";
+		        return;
+		    }
+
+		    const displayValue = Math.round(value);
+		    const percent = Math.round((displayValue / maxFee) * 100);
+		    const width = Math.min(percent, 100);
+
+		    	// Farbklasse je nach Typ
+			let colorClass = "";
+
+			if (id.includes("fast")) colorClass = "fee-fast";
+			else if (id.includes("medium")) colorClass = "fee-medium";
+			else if (id.includes("slow")) colorClass = "fee-slow";
+
+		    el.innerHTML = `
+		        ${symbol} ${displayValue} sat/vB
+		        <span class="fee-bar-wrap">
+		            <span class="fee-bar ${colorClass}" style="width:${width}%"></span>
+		        </span>
+		        <span class="fee-percent">${percent}%</span>
+		    `;
+
+		    el.title = tooltip;
+		}
+
+		setFee("fee-slow", slow, "🟢", "Slow → cheap", "slow");
+		setFee("fee-medium", medium, "🟡", "Recommended", "medium");
+		setFee("fee-fast", fast, "🔴", "Fastest", "fast");
+
+
+        } else {
+            ["srv-version", "srv-protocol", "blockheight"].forEach(id => safeSet(id, "-"));
+            ["fee-fast", "fee-medium", "fee-slow"].forEach(id => safeSet(id, "-"));
+        }
+
+    } catch (e) {
+        console.log("Electrum fetch failed", e);
+    }
+
+lastUpdateTimestamp = Date.now();
+updateLastUpdated();
+
+}
+
+/* =========================
+   UPTIME
+========================= */
+
+async function loadUptime() {
+    try {
+        const res = await fetch("uptime.php");
+        const data = await res.json();
+
+	if (!data.length) return;
+
+        const el = document.getElementById("uptime");
+        if (!el) return;
+
+        el.innerHTML = "";
+
+        let online = 0;
+
+	data.forEach((e, index) => {
+            const d = document.createElement("span");
+            d.className = "uptime-dot";
+
+		    // 👉 HIER rein
+		    d.style.borderRadius = "2px";
+		    d.style.marginRight = "2px";
+
+		if (e.s === 1) {
+		    online++;
+
+		    // Intensität basierend auf Position (neuere Daten = kräftiger)
+		    const intensity = (index + 1) / data.length;
+
+		    if (intensity > 0.66) {
+		        d.style.background = "#4ed440"; // stark
+		    } else if (intensity > 0.33) {
+		        d.style.background = "#2fae2f"; // mittel
+		    } else {
+		        d.style.background = "#1f7a1f"; // schwach
+		    }
+
+		} else {
+		    d.style.background = "#444";
+		}
+
+            el.appendChild(d);
+        });
+
+	const percent = Math.round((online / data.length) * 100);
+
+	let color = "#4ed440";
+	if (percent < 95) color = "#f1c40f";
+	if (percent < 80) color = "#e74c3c";
+
+	el.innerHTML += `<div style="margin-top:8px; color:${color}">
+	    Uptime: ${percent}%
+	</div>`;
+
+    } catch (e) {
+        console.log("Uptime error", e);
+    }
+}
+
+/* =========================
+   OPEN ELECTRUM
+========================= */
+
+function openElectrum() {
+    const address = `${onion}:50001:t`;
+    const url = `electrum://${onion}:50001`;
+
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(address);
+    } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = address;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+    }
+
+    showToast("✓ Copied • Opening Electrum", "info");
+
+    setTimeout(() => {
+        window.location.href = url;
+    }, 300);
+
+    // 🔥 Fallback
+    setTimeout(() => {
+        if (!document.hidden) {
+            showToast("Electrum not installed?", "warning");
+        }
+    }, 1500);
+}
+
+/* ===========================
+	History
+============================== */
+
+function addHistory(message) {
+    const now = new Date().toLocaleTimeString();
+    historyLog.unshift(`${now} – ${message}`);
+
+    // max 5 Einträge
+    historyLog = historyLog.slice(0, 5);
+
+    const el = document.getElementById("history");
+    if (!el) return;
+
+    el.innerHTML = historyLog.map(e => `<div>${e}</div>`).join("");
+}
+
+/* ===========================
+        Bitcoin-Node
+============================== */
+
+
+async function loadBTC() {
+    try {
+        const res = await fetch("btcinfo.php");
+        const data = await res.json();
+
+        const v = document.getElementById("btc-version");
+        const s = document.getElementById("btc-sync");
+        const h = document.getElementById("btc-height");
+
+	const clean = (data.version || "").match(/:([0-9.]+)\//);
+
+        /* if (v) v.innerText = data.version.replace(/\//g, ""); */
+	if (v) v.innerText = clean ? clean[1] : (data.version || "-");
+        if (h) h.innerText = data.blocks;
+
+        if (s) {
+            if (data.sync === "synced") {
+                s.innerText = "synced";
+                s.style.color = "#4ed440";
+            } else {
+                s.innerText = "syncing";
+                s.style.color = "#f1c40f";
+            }
+        }
+
+    } catch (e) {
+        console.log("BTC load failed", e);
+        showToast("BTC backend unavailable", "warning");
+    }
+}
+
+
+// startet den Live-Timer genau einmal
+loadBTC();
+setInterval(loadBTC, 30000);
+setInterval(updateLastUpdated, 1000);
+
+</script>
+
+<div id="toast"></div>
+
+</body>
+</html>
+
+

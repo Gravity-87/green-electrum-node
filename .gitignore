@@ -1,17 +1,45 @@
-# Runtime / generated
-tor-data/
+# =========================
+# Secrets / Zertifikate
+# =========================
 certs/
+*.key
+*.crt
+*.pem
+*.p12
+*.pfx
+
+# =========================
+# Runtime / State / Logs
+# =========================
+tor-data/
 *.log
 *.tmp
+html/uptime.log
+html/last_seen.txt
+html/api/btc.json
 
-# OS / editor
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-
-# Optional secrets/config (falls vorhanden)
+# =========================
+# Env / lokale Config
+# =========================
 *.env
 .env
 rpc-config.php
 
+# =========================
+# Debug / Backups
+# =========================
+html/debug.php
+*.bak
+*.bak-*
+docker-compose.yml.bak
+html/index.html.bak
+html/style.css.bak
+html/style.css.bak-aktuell
+
+# =========================
+# OS / Editor
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
