@@ -3,6 +3,8 @@ $host = "192.168.178.56";
 $port = 50001;
 $timeout = 3;
 
+date_default_timezone_set('Europe/Berlin');
+
 function electrum_request($host, $port, $payload) {
     $fp = @fsockopen($host, $port, $errno, $errstr, 2);
     if (!$fp) return null;
@@ -40,8 +42,12 @@ if ($fp) fclose($fp);
 $lastSeenFile = __DIR__ . "/last_seen.txt";
 
 if ($status === "online") {
-    @file_put_contents($lastSeenFile, time());
+    $ok = @file_put_contents($lastSeenFile, (string)time(), LOCK_EX);
+    if ($ok === false) {
+        error_log("Cannot write last_seen file: $lastSeenFile");
+    }
 }
+
 
 $lastSeen = @file_exists($lastSeenFile)
     ? intval(@file_get_contents($lastSeenFile))

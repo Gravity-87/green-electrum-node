@@ -3,7 +3,7 @@ services:
     image: php:8.2-apache
     container_name: green-electrum-web
     volumes:
-      - ./html:/var/www/html:ro
+      - ./html:/var/www/html
       - /home/umbrel/umbrel/app-data/bitcoin/data/bitcoin/.cookie:/run/bitcoin/.cookie:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -38,11 +38,7 @@ services:
       sh -c "apk add --no-cache tor &&
              tor -f /torrc"
     restart: unless-stopped
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /run
-      - /var/run
+    read_only: false
     security_opt:
       - no-new-privileges:true
     pids_limit: 100

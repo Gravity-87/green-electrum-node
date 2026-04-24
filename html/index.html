@@ -241,12 +241,16 @@ function showToast(message, type = "success") {
 ========================= */
 
 function copyOnion(el) {
-    copyText(el.innerText.trim(), el);
+    const text = document.getElementById("onion").innerText.trim();
+    copyText(text, el);
 }
 
 function copyDonate(el) {
-    copyText(el.innerText.trim(), el);
+    const text = document.getElementById("donate").innerText.trim();
+    copyText(text, el);
 }
+
+
 
 function copyText(text, btn) {
     if (navigator.clipboard && window.isSecureContext) {
@@ -274,8 +278,8 @@ function copyText(text, btn) {
 ========================= */
 
 function formatTime(ts) {
-    if (!ts) return "-";
-    return new Date(ts * 1000).toLocaleString();
+  if (!ts) return "never";
+  return new Date(ts * 1000).toLocaleString("de-DE", { timeZone: "Europe/Berlin" });
 }
 
 function safeSet(id, value) {
