@@ -9,7 +9,17 @@
 
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "${REPO_DIR:-}" ]]; then
+  echo "ERROR: Could not detect git repository root."
+  exit 1
+fi
+
+# Dann immer aus Repo-root arbeiten:
+cd "$REPO_DIR"
+
+
 STAGE_MODE=""
 COMMIT_MSG=""
 DRY_RUN=0
