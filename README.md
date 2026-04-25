@@ -25,11 +25,39 @@ http://yfo2ys4ddwlwkshcdrfr2kndhe7c3hutpcvqyiiwbm2djddjmm2dj4id.onion/
 - Tor-only access
 - No tracking on microsite
 
-## How to publish updates
-
-In this repo, I use a script to publish my changed files:
-
-Run a safe preview first: `./scripts/git-update.sh --all --dry-run`  
-Publish all changes: `./scripts/git-update.sh --all -m "your commit message"`  
-Publish selected files only: `./scripts/git-update.sh --files "html/index.html html/style.css" -m "your commit message"`  
 Use `./scripts/git-update.sh --help` for all options.
+
+
+## Operations (Quick Guide)
+
+### 1) GitHub aktualisieren (Code-Versionierung)
+Use when you changed files and want to save/publish in GitHub.
+
+- Preview:
+  `./scripts/git-update.sh --all --dry-run`
+- Commit + push all:
+  `./scripts/git-update.sh --all -m "your message"`
+- Commit + push selected files:
+  `./scripts/git-update.sh --files "html/index.html html/style.css" -m "your message"`
+- Help function:
+  `./scripts/git-update.sh --help`
+
+### 2) Live-Status prüfen (ohne Änderungen)
+Use to quickly check container + status endpoint + Tor health.
+
+- `./scripts/deploy.sh status`
+
+### 3) Deploy auf Server (Änderungen live schalten)
+Use after infra/config changes or when you want a clean restart/check.
+
+- Preview:
+  `./scripts/deploy.sh --dry-run`
+- Apply:
+  `./scripts/deploy.sh`
+- With git pull before deploy:
+  `./scripts/deploy.sh --pull`
+
+### 4) Minimal release flow (GitHub + Deploy)
+Use when you want one command for both steps.
+
+- `./scripts/release.sh --all -m "your message"`
