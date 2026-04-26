@@ -43,3 +43,6 @@ html/style.css.bak-aktuell
 Thumbs.db
 .vscode/
 .idea/
+
+# runtime state
+data/
