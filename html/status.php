@@ -5,12 +5,39 @@ $timeout = 3;
 
 date_default_timezone_set('Europe/Berlin');
 
-$cacheFile = __DIR__ . "/status_cache.json";
-$cacheTtl  = 3; // Sekunden
+/* =========================
+   Persistent state directory
+========================= */
+function pick_state_dir() {
+    $candidates = [
+        "/state", // persistent mount (bevorzugt)
+        __DIR__ . "/data",
+        sys_get_temp_dir() . "/green-electrum-site"
+    ];
 
+    foreach ($candidates as $dir) {
+        if (!is_dir($dir)) @mkdir($dir, 0775, true);
+        if (is_dir($dir) && is_writable($dir)) return $dir;
+    }
+    return null;
+}
+
+$stateDir = pick_state_dir();
+$cacheFile     = $stateDir ? $stateDir . "/status_cache.json" : null;
+$lastSeenFile  = $stateDir ? $stateDir . "/last_seen.txt" : null;
+$paceStateFile = $stateDir ? $stateDir . "/block_pace_state.json" : null;
+
+$cacheTtl = 3; // seconds
+
+$paceTtlHours   = 72;   // adjustable
+$paceMaxSamples = 288;  // adjustable
+
+/* =========================
+   Helpers
+========================= */
 function fee_convert($val) {
     if (!is_numeric($val) || $val <= 0) return "-";
-    return round($val * 100000000 / 1000, 1); // BTC/kB -> sat/vB (1 decimal)
+    return round($val * 100000000 / 1000, 1); // BTC/kB -> sat/vB
 }
 
 function electrum_request($host, $port, $payload) {
@@ -37,8 +64,8 @@ function electrum_request($host, $port, $payload) {
 }
 
 /**
- * Extract block time from 80-byte header hex.
- * nTime is bytes 68..71 (little-endian)
+ * Extract nTime from block header hex (80-byte header)
+ * nTime bytes are at offset 68..71 (little-endian)
  */
 function header_time_from_hex($hex) {
     if (!is_string($hex) || strlen($hex) < 144) return null;
@@ -56,11 +83,6 @@ function header_time_from_hex($hex) {
     return null;
 }
 
-
-/**
- * Fee-Helperfunktionen
- */
-
 function mempool_state_label($vbytes) {
     if ($vbytes < 300000) return "low";
     if ($vbytes < 1500000) return "normal";
@@ -70,7 +92,6 @@ function mempool_state_label($vbytes) {
 function normalize_histogram($hist) {
     $rows = [];
 
-    // 1) nur valide rows
     foreach ($hist as $r) {
         if (!is_array($r) || count($r) < 2) continue;
         $fee = floatval($r[0]);
@@ -80,12 +101,12 @@ function normalize_histogram($hist) {
     }
     if (count($rows) === 0) return [];
 
-    // 2) nach Fee absteigend sortieren (wichtig!)
+    // descending by fee
     usort($rows, function($a, $b) {
         return $b[0] <=> $a[0];
     });
 
-    // 3) erkennen, ob 2. Spalte kumulativ ist
+    // detect cumulative second column
     $isCumulative = true;
     for ($i = 1; $i < count($rows); $i++) {
         if ($rows[$i][1] < $rows[$i-1][1]) {
@@ -94,7 +115,6 @@ function normalize_histogram($hist) {
         }
     }
 
-    // 4) falls kumulativ -> in bucket sizes umrechnen
     if ($isCumulative) {
         $bucketed = [];
         $prev = 0.0;
@@ -107,12 +127,13 @@ function normalize_histogram($hist) {
         return $bucketed;
     }
 
-    return $rows; // schon bucketed
+    return $rows;
 }
 
 function fee_from_histogram($hist, $targetVbytes) {
     $sum = 0.0;
     $lastFee = null;
+
     foreach ($hist as $row) {
         $fee = floatval($row[0]);
         $vbytes = floatval($row[1]);
@@ -122,12 +143,77 @@ function fee_from_histogram($hist, $targetVbytes) {
         $sum += $vbytes;
         if ($sum >= $targetVbytes) return round($fee, 1);
     }
+
     return $lastFee !== null ? round($lastFee, 1) : null;
 }
 
+/* ===== Block pace persistence ===== */
+function load_pace_state($file) {
+    if (!$file) return ["last_height" => null, "last_time" => null, "samples" => []];
+    if (!file_exists($file)) return ["last_height" => null, "last_time" => null, "samples" => []];
 
-// ===== Cache fast path =====
-if (@file_exists($cacheFile)) {
+    $raw = @file_get_contents($file);
+    $obj = $raw ? json_decode($raw, true) : null;
+    if (!is_array($obj)) return ["last_height" => null, "last_time" => null, "samples" => []];
+
+    $obj["last_height"] = isset($obj["last_height"]) ? intval($obj["last_height"]) : null;
+    $obj["last_time"]   = isset($obj["last_time"]) ? intval($obj["last_time"]) : null;
+    $obj["samples"]     = (isset($obj["samples"]) && is_array($obj["samples"])) ? $obj["samples"] : [];
+
+    return $obj;
+}
+
+function save_pace_state($file, $state) {
+    if (!$file) return;
+    @file_put_contents($file, json_encode($state, JSON_UNESCAPED_SLASHES), LOCK_EX);
+}
+
+function prune_pace_samples($samples, $ttlHours, $maxSamples) {
+    $now = time();
+    $ttl = $ttlHours * 3600;
+    $out = [];
+
+    foreach ($samples as $s) {
+        $sec = isset($s["sec"]) ? floatval($s["sec"]) : null;
+        $ts  = isset($s["ts"]) ? intval($s["ts"]) : null;
+        if ($sec === null || $ts === null) continue;
+        if ($sec < 60 || $sec > 7200) continue;
+        if (($now - $ts) > $ttl) continue;
+        $out[] = ["sec" => $sec, "ts" => $ts];
+    }
+
+    if (count($out) > $maxSamples) {
+        $out = array_slice($out, -$maxSamples);
+    }
+
+    return $out;
+}
+
+function pace_trend_from_samples($samples) {
+    $n = count($samples);
+    if ($n < 10) return ["trend" => "stable", "arrow" => "→"];
+
+    $vals = array_map(function($x){ return floatval($x["sec"]); }, $samples);
+
+    $shortN = min(6, count($vals));
+    $longN  = min(24, count($vals));
+
+    $short = array_slice($vals, -$shortN);
+    $long  = array_slice($vals, -$longN);
+
+    $sAvg = array_sum($short) / count($short);
+    $lAvg = array_sum($long) / count($long);
+
+    $threshold = 30;
+    if ($sAvg > $lAvg + $threshold) return ["trend" => "slower", "arrow" => "↑"];
+    if ($sAvg < $lAvg - $threshold) return ["trend" => "faster", "arrow" => "↓"];
+    return ["trend" => "stable", "arrow" => "→"];
+}
+
+/* =========================
+   Cache fast path
+========================= */
+if ($cacheFile && file_exists($cacheFile)) {
     $raw = @file_get_contents($cacheFile);
     $cached = $raw ? json_decode($raw, true) : null;
 
@@ -140,7 +226,9 @@ if (@file_exists($cacheFile)) {
     }
 }
 
-// ===== STATUS + LATENCY =====
+/* =========================
+   STATUS + LATENCY
+========================= */
 $start = microtime(true);
 $fp = @fsockopen($host, $port, $errno, $errstr, $timeout);
 $latency = round((microtime(true) - $start) * 1000);
@@ -148,17 +236,17 @@ $latency = round((microtime(true) - $start) * 1000);
 $status = $fp ? "online" : "offline";
 if ($fp) fclose($fp);
 
-// ===== LAST SEEN =====
-$lastSeenFile = __DIR__ . "/last_seen.txt";
-
-
-if ($status === "online") {
-    $ok = @file_put_contents($lastSeenFile, (string)time(), LOCK_EX);
-    if ($ok === false) error_log("Cannot write last_seen file: $lastSeenFile");
+/* =========================
+   LAST SEEN
+========================= */
+if ($status === "online" && $lastSeenFile) {
+    @file_put_contents($lastSeenFile, (string)time(), LOCK_EX);
 }
-$lastSeen = @file_exists($lastSeenFile) ? intval(@file_get_contents($lastSeenFile)) : 0;
+$lastSeen = ($lastSeenFile && file_exists($lastSeenFile)) ? intval(@file_get_contents($lastSeenFile)) : 0;
 
-// ===== DEFAULTS =====
+/* =========================
+   Defaults
+========================= */
 $blockheight = null;
 $blockTime = null;
 $blockAgeSec = null;
@@ -176,20 +264,24 @@ $feesNote = null;
 
 $feeRangeMin = null;
 $feeRangeMax = null;
-
-
-$uptime = "-";
+$feePeak = null;
+$feeP90 = null;
 
 $mempoolVbytes = null;
 $mempoolState = null;
 
-$feePeak = null;
-$feeP90 = null; // optional: "typisch hoher Bereich"
+$blockPaceAvgSec = null;
+$blockPaceTrend = "stable";
+$blockPaceArrow = "→";
+$blockPaceSamples = 0;
 
+$uptime = "-";
 
-// ===== ELECTRUM DATA =====
+/* =========================
+   ELECTRUM DATA
+========================= */
 if ($status === "online") {
-    // BLOCKHEIGHT + HEADER TIME
+    // blockheight + latest header time
     $resHeader = electrum_request($host, $port, [
         "id" => 1,
         "method" => "blockchain.headers.subscribe",
@@ -197,7 +289,7 @@ if ($status === "online") {
     ]);
 
     if ($resHeader && isset($resHeader["result"]["height"])) {
-        $blockheight = $resHeader["result"]["height"];
+        $blockheight = intval($resHeader["result"]["height"]);
     }
 
     if ($resHeader && isset($resHeader["result"]["hex"])) {
@@ -205,7 +297,47 @@ if ($status === "online") {
         if ($blockTime) $blockAgeSec = max(0, time() - $blockTime);
     }
 
-    // VERSION + PROTOCOL (robust parse)
+    // block pace (server persistent)
+    $pace = load_pace_state($paceStateFile);
+
+    if (is_numeric($blockheight) && is_numeric($blockTime)) {
+        $lastH = $pace["last_height"];
+        $lastT = $pace["last_time"];
+
+        if (is_numeric($lastH) && is_numeric($lastT)) {
+            $dH = intval($blockheight) - intval($lastH);
+            $dT = intval($blockTime) - intval($lastT);
+
+            if ($dH > 0 && $dT > 0) {
+                $secPerBlock = $dT / $dH;
+                if ($secPerBlock >= 60 && $secPerBlock <= 7200) {
+                    $pace["samples"][] = [
+                        "sec" => round($secPerBlock, 2),
+                        "ts"  => time()
+                    ];
+                }
+            }
+        }
+
+        $pace["last_height"] = intval($blockheight);
+        $pace["last_time"]   = intval($blockTime);
+    }
+
+    $pace["samples"] = prune_pace_samples($pace["samples"], $paceTtlHours, $paceMaxSamples);
+    save_pace_state($paceStateFile, $pace);
+
+    $blockPaceSamples = count($pace["samples"]);
+    if ($blockPaceSamples > 0) {
+        $sum = 0.0;
+        foreach ($pace["samples"] as $s) $sum += floatval($s["sec"]);
+        $blockPaceAvgSec = round($sum / $blockPaceSamples, 1);
+
+        $tr = pace_trend_from_samples($pace["samples"]);
+        $blockPaceTrend = $tr["trend"];
+        $blockPaceArrow = $tr["arrow"];
+    }
+
+    // server.version
     $resVersion = electrum_request($host, $port, [
         "id" => 2,
         "method" => "server.version",
@@ -221,7 +353,7 @@ if ($status === "online") {
         }
     }
 
-    // FEES: primär über mempool histogram, fallback estimatefee
+    // FEES: histogram first, estimatefee fallback
     $usedHistogram = false;
 
     $histRes = electrum_request($host, $port, [
@@ -231,43 +363,40 @@ if ($status === "online") {
     ]);
 
     if ($histRes && isset($histRes["result"]) && is_array($histRes["result"]) && count($histRes["result"]) > 0) {
-        $hist = $histRes["result"];
+        $hist = normalize_histogram($histRes["result"]);
 
-        // mempool size (vbytes) + state
-	$hist = normalize_histogram($histRes["result"]);
+        $total = 0.0;
+        foreach ($hist as $r) $total += floatval($r[1]);
 
-	$total = 0.0;
-	foreach ($hist as $r) $total += floatval($r[1]);
+        $mempoolVbytes = intval($total);
+        $mempoolState = mempool_state_label($mempoolVbytes);
 
-	$mempoolVbytes = intval($total);
-	$mempoolState = mempool_state_label($mempoolVbytes);
+        if (count($hist) > 0) {
+            $feePeak = round(floatval($hist[0][0]), 1); // raw peak
+        }
+        if ($total > 0) {
+            $feeP90 = fee_from_histogram($hist, $total * 0.10); // high-tier reference
+        }
 
-	    if (count($hist) > 0) {
-	        $feePeak = round(floatval($hist[0][0]), 1); // höchster Fee-Bucket
-	    }
-	    if ($total > 0) {
-	        $feeP90 = fee_from_histogram($hist, $total * 0.10); // obere 10%
-	    }
+        $fastTarget   = $total * 0.15;
+        $mediumTarget = $total * 0.50;
+        $slowTarget   = $total * 0.90;
 
-	$fastTarget   = $total * 0.15;
-	$mediumTarget = $total * 0.50;
-	$slowTarget   = $total * 0.90;
-
-	$fastH   = fee_from_histogram($hist, $fastTarget);
-	$mediumH = fee_from_histogram($hist, $mediumTarget);
-	$slowH   = fee_from_histogram($hist, $slowTarget);
+        $fastH   = fee_from_histogram($hist, $fastTarget);
+        $mediumH = fee_from_histogram($hist, $mediumTarget);
+        $slowH   = fee_from_histogram($hist, $slowTarget);
 
         if ($fastH !== null || $mediumH !== null || $slowH !== null) {
             $fees = [
-                "fast" => $fastH ?? "-",
+                "fast"   => $fastH ?? "-",
                 "medium" => $mediumH ?? "-",
-                "slow" => $slowH ?? "-"
+                "slow"   => $slowH ?? "-"
             ];
             $usedHistogram = true;
         }
     }
 
-    // Fallback auf estimatefee
+    // fallback estimatefee
     if (!$usedHistogram) {
         $fastRes = electrum_request($host, $port, [
             "id" => 3,
@@ -294,9 +423,9 @@ if ($status === "online") {
         if ($fastFee === "-" && $mediumFee !== "-") $fastFee = $mediumFee;
 
         $fees = [
-            "fast" => $fastFee,
+            "fast"   => $fastFee,
             "medium" => $mediumFee,
-            "slow" => $slowFee
+            "slow"   => $slowFee
         ];
     }
 
@@ -315,11 +444,9 @@ if ($status === "online") {
     $uptime = "running";
 }
 
-
-// fee range from final fees array (robust, always last)
-$feeRangeMin = null;
-$feeRangeMax = null;
-
+/* =========================
+   Fee range from final fees
+========================= */
 $vals = [];
 foreach (["slow", "medium", "fast"] as $k) {
     if (isset($fees[$k]) && is_numeric($fees[$k])) {
@@ -331,9 +458,9 @@ if (count($vals) > 0) {
     $feeRangeMax = max($vals);
 }
 
-
-
-// ===== OUTPUT =====
+/* =========================
+   OUTPUT
+========================= */
 $out = [
     "status" => $status,
     "latency" => $latency,
@@ -357,12 +484,23 @@ $out = [
     "mempool_vbytes" => $mempoolVbytes,
     "mempool_state" => $mempoolState,
 
+    "block_pace_avg_sec" => $blockPaceAvgSec,
+    "block_pace_trend" => $blockPaceTrend,
+    "block_pace_arrow" => $blockPaceArrow,
+    "block_pace_samples" => $blockPaceSamples,
+
     "uptime" => $uptime,
     "generated_at" => time()
 ];
 
-// Cache write (best effort)
-@file_put_contents($cacheFile, json_encode($out, JSON_UNESCAPED_SLASHES), LOCK_EX);
+// optional temporary debug (remove later if desired)
+//$out["debug_state_dir"] = $stateDir;
+//$out["debug_state_writable"] = $stateDir ? is_writable($stateDir) : false;
+
+// cache write best effort
+if ($cacheFile) {
+    @file_put_contents($cacheFile, json_encode($out, JSON_UNESCAPED_SLASHES), LOCK_EX);
+}
 
 header('Content-Type: application/json');
 echo json_encode($out, JSON_UNESCAPED_SLASHES);

@@ -5,6 +5,7 @@ services:
     volumes:
       - ./html:/var/www/html
       - /home/umbrel/umbrel/app-data/bitcoin/data/bitcoin/.cookie:/run/bitcoin/.cookie:ro
+      - /home/umbrel/green-electrum-site/data:/state
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

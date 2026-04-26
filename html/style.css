@@ -452,6 +452,25 @@ hr {
   color: #ff9b8f;
 }
 
+/* =========================
+   BLOCK PACE
+========================= */
+
+.pace-up {        /* langsamer (mehr sec/block) */
+  color: #ff7675; /* rot */
+}
+.pace-down {      /* schneller (weniger sec/block) */
+  color: #55efc4; /* grün */
+}
+.pace-stable {    /* gleichbleibend */
+  color: #ffeaa7; /* gelb */
+}
+.sub-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.68);
+}
+
 
 /* =========================
    UPTIME
