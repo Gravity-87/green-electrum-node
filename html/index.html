@@ -44,6 +44,9 @@
     <div class="last-updated" id="lastUpdated">
       Last updated: <span id="lastUpdatedTime">–</span>
     </div>
+
+    <div class="last-updated">Last check: <span id="lastCheckTime">–</span></div>
+
   </div>
 
   <div class="card-body">
@@ -51,11 +54,8 @@
       <div class="stat-row"><span>⚡ Latency</span><strong><span id="latency">...</span> ms</strong></div>
       <div class="stat-row"><span>🕒 Last seen</span><strong id="lastseen">...</strong></div>
       <div class="stat-row"><span>⛓️ Blockheight</span><strong id="blockheight">...</strong></div>
+      <div class="stat-row"><span>🧱 Block freshness</span><strong id="blockfresh">...</strong></div>
     </div>
-
-    <div class="divider"></div>
-
-    <div class="history" id="history"></div>
 
     <div class="divider"></div>
 
@@ -69,10 +69,16 @@
 
     <div class="meta">
       <strong>Fees</strong>
-      <div class="fee-hint">Fees are dynamic • higher = faster confirmation</div>
-      <div class="fee-row"><strong id="fee-slow"></strong></div>
-      <div class="fee-row"><strong id="fee-medium"></strong></div>
-      <div class="fee-row"><strong id="fee-fast"></strong></div>
+
+      <div class="mempool-state" id="mempoolState">Mempool: ...</div>
+      <div class="fee-hint" id="feeHint">Recommended tiers are practical targets.</div>
+
+      <div class="fee-range" id="feeRange">Range: -</div>
+      <div class="fee-peak" id="feePeak">Peak observed: -</div>
+
+      <div class="fee-row" id="fee-slow"></div>
+      <div class="fee-row" id="fee-medium"></div>
+      <div class="fee-row" id="fee-fast"></div>
     </div>
 
     <div class="divider"></div>
@@ -194,24 +200,44 @@
 
 
 <script>
+
+/* ==========================
+	GLOBAL SECTION 
+===========================*/
+
 const onion = "yfo2ys4ddwlwkshcdrfr2kndhe7c3hutpcvqyiiwbm2djddjmm2dj4id.onion";
 
 let lastUpdateTimestamp = null;
 let historyLog = [];
+let lastNodeStatus = null;
+
+let lastBlockHeight = null;
+let lastBlockChangeTs = null;
+let lastConnOk = true;
+let lastHighLatencyWarnTs = 0;
+
+let blockFreshTickerStarted = false;
+
+let feeStable = { fast: null, medium: null, slow: null };
+let feeCand = { fast: null, medium: null, slow: null };
+let feeCandCount = { fast: 0, medium: 0, slow: 0 };
 
 /* =========================
    INIT (einmal beim Laden)
 ========================= */
 
-document.addEventListener("DOMContentLoaded", () => {
-    updateAll();
-    loadElectrum();
-    loadUptime();
+document.addEventListener("DOMContentLoaded", async () => {
+    loadBlockFreshState();
+
+    await Promise.all([updateAll(), loadUptime(), loadBTC()]);
+    startBlockFreshTicker();
 
     setInterval(updateAll, 10000);
-    setInterval(loadElectrum, 15000);
     setInterval(loadUptime, 30000);
+    setInterval(loadBTC, 30000);
+    setInterval(updateLastUpdated, 1000);
 });
+
 
 /* ============================
     TOAST System
@@ -235,7 +261,6 @@ function showToast(message, type = "success") {
 }
 
 
-
 /* =========================
    COPY
 ========================= */
@@ -249,7 +274,6 @@ function copyDonate(el) {
     const text = document.getElementById("donate").innerText.trim();
     copyText(text, el);
 }
-
 
 
 function copyText(text, btn) {
@@ -304,124 +328,364 @@ function updateLastUpdated() {
     }
 }
 
+function fmtAge(seconds) {
+    if (seconds == null) return "-";
+    if (seconds < 60) return `${seconds}s ago`;
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    if (m < 60) return `${m}m ${s}s ago`;
+    const h = Math.floor(m / 60);
+    const mm = m % 60;
+    return `${h}h ${mm}m ago`;
+}
+
+function startBlockFreshTicker() {
+    if (blockFreshTickerStarted) return;
+    blockFreshTickerStarted = true;
+
+    setInterval(() => {
+        if (!lastBlockChangeTs) return;
+        const ageSec = Math.floor((Date.now() - lastBlockChangeTs) / 1000);
+        safeSet("blockfresh", fmtAge(ageSec));
+    }, 1000);
+}
+
+function loadBlockFreshState() {
+    try {
+        const h = localStorage.getItem("bf_height");
+        const ts = localStorage.getItem("bf_ts");
+        if (h !== null) lastBlockHeight = Number(h);
+        if (ts !== null) lastBlockChangeTs = Number(ts);
+    } catch (_) {}
+}
+
+function saveBlockFreshState() {
+    try {
+        if (lastBlockHeight !== null) localStorage.setItem("bf_height", String(lastBlockHeight));
+        if (lastBlockChangeTs !== null) localStorage.setItem("bf_ts", String(lastBlockChangeTs));
+    } catch (_) {}
+}
+
+function feeWidthAbs(v) {
+    v = Number(v);
+    if (!Number.isFinite(v) || v <= 0) return 0;
+
+    // absolute, gut lesbare Skala bei niedrigen Fees
+    if (v <= 1) return 22;
+    if (v <= 2) return 32;
+    if (v <= 5) return 48;
+    if (v <= 10) return 65;
+    if (v <= 20) return 82;
+    return 100;
+}
+
+function renderFeeRow(id, label, rawVal) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    const v = Number(rawVal);
+    if (!Number.isFinite(v) || v <= 0) {
+        el.innerHTML = `<div class="fee-line"><span class="fee-label">${label}: -</span></div>`;
+        return;
+    }
+
+    const w = feeWidthAbs(v);
+
+    // Farbklasse aus id statt label ableiten
+    let cls = "fee-medium";
+    if (id.includes("slow")) cls = "fee-slow";
+    else if (id.includes("fast")) cls = "fee-fast";
+
+    el.innerHTML = `
+      <div class="fee-line">
+        <span class="fee-label">${label}: ${fmtFee(v)} sat/vB</span>
+        <span class="fee-bar-wrap">
+          <span class="fee-bar ${cls}" style="width:${w}%"></span>
+        </span>
+      </div>
+    `;
+}
+
+function renderFees(fees = {}) {
+    const slow = fees?.slow ?? "-";
+    const medium = fees?.medium ?? "-";
+    const fast = fees?.fast ?? "-";
+
+    renderFeeRow("fee-slow", "Economy", slow);
+    renderFeeRow("fee-medium", "Default", medium);
+    renderFeeRow("fee-fast", "Priority", fast);
+}
+
+
+function fmtVbytes(vb) {
+    if (!Number.isFinite(vb)) return "-";
+    if (vb >= 1000000) return `${(vb / 1000000).toFixed(2)}M vB`;
+    if (vb >= 1000) return `${Math.round(vb / 1000)}k vB`;
+    return `${vb} vB`;
+}
+
+
+function smoothFeeValue(key, incoming) {
+    // "-" oder ungültig direkt durchreichen
+    const num = Number(incoming);
+    if (!Number.isFinite(num) || num <= 0) return incoming ?? "-";
+
+    // erster Wert
+    if (feeStable[key] === null) {
+        feeStable[key] = num;
+        feeCand[key] = num;
+        feeCandCount[key] = 0;
+        return num;
+    }
+
+    // gleich wie stabil -> sofort
+    if (num === feeStable[key]) {
+        feeCand[key] = num;
+        feeCandCount[key] = 0;
+        return feeStable[key];
+    }
+
+    // Kandidat zählen
+    if (feeCand[key] === num) {
+        feeCandCount[key] += 1;
+    } else {
+        feeCand[key] = num;
+        feeCandCount[key] = 1;
+    }
+
+    // erst nach 2x bestätigen übernehmen
+    if (feeCandCount[key] >= 2) {
+        feeStable[key] = num;
+        feeCandCount[key] = 0;
+    }
+
+    return feeStable[key];
+}
+
+function getSmoothedFees(rawFees = {}) {
+    return {
+        fast: smoothFeeValue("fast", rawFees.fast),
+        medium: smoothFeeValue("medium", rawFees.medium),
+        slow: smoothFeeValue("slow", rawFees.slow)
+    };
+}
+
+function fmtFee(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return "-";
+    return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
+
+
+
 /* =========================
    STATUS (nur Basisdaten!)
 ========================= */
 
 async function updateAll() {
     try {
-        const res = await fetch("status.php");
+        const res = await fetch("status.php?t=" + Date.now(), { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
-        safeSet("status-text", data.status);
-        safeSet("latency", data.latency);
+        // Zeiten
+        const now = new Date();
+        const t = now.toLocaleTimeString("de-DE", { hour12: false });
+        safeSet("lastCheckTime", t);
+
+        // Für "Last updated: Xs ago"
+        lastUpdateTimestamp = Date.now();
+        updateLastUpdated();
+
+        // Core status
+        const status = data.status || "offline";
+        const latency = Number.isFinite(Number(data.latency)) ? Number(data.latency) : "-";
+
+        safeSet("status-text", status);
+        safeSet("latency", latency);
         safeSet("lastseen", formatTime(data.last_seen));
 
+        // Dot
         const dot = document.getElementById("status-dot");
-	if (dot) {
-		if (data.status === "online") {
-			dot.classList.add("online");
- 			dot.classList.remove("offline");
+        if (dot) {
+            if (status === "online") {
+                dot.classList.add("online");
+                dot.classList.remove("offline");
+            } else {
+                dot.classList.add("offline");
+                dot.classList.remove("online");
+            }
+        }
 
-		    addHistory("Node online");
+        // History nur bei Statuswechsel
+        if (status === "online" && lastNodeStatus !== "online") {
+            addHistory("Node online");
+            lastNodeStatus = "online";
+        } else if (status !== "online" && lastNodeStatus !== "offline") {
+            addHistory("Node offline");
+            lastNodeStatus = "offline";
+        }
 
-		    // ⚠️ Warning bei hoher Latenz
-		    if (data.latency > 1000) {
-		        showToast("High latency – connection may be slow", "warning");
-		    }
+        // Error-Zustand zurücksetzen
+        if (status === "online") {
+            lastConnOk = true;
+        }
 
-		} else {
-		    dot.classList.add("offline");
-		    dot.classList.remove("online");
+        // High latency warning (max 1x pro Minute)
+        const nowTs = Date.now();
+        if (status === "online" && typeof latency === "number" && latency > 1000) {
+            if (nowTs - lastHighLatencyWarnTs > 60000) {
+                showToast("High latency – connection may be slow", "warning");
+                lastHighLatencyWarnTs = nowTs;
+            }
+        }
 
-		    safeSet("status-text", "offline");
-		    addHistory("Node offline");
-		}
-	}
+        // Blockheight + Block freshness
+        const bh = Number.isFinite(Number(data.blockheight)) ? Number(data.blockheight) : null;
+        safeSet("blockheight", bh ?? "-");
 
-    } catch (e) {
-	    console.error("STATUS FAIL:", e);
-	    showToast("Connection failed", "error");
+        if (bh !== null) {
+            if (lastBlockHeight === null) {
+                lastBlockHeight = bh;
+                if (!lastBlockChangeTs) lastBlockChangeTs = Date.now();
+                saveBlockFreshState();
+            } else if (bh !== lastBlockHeight) {
+                lastBlockHeight = bh;
+                lastBlockChangeTs = Date.now();
+                saveBlockFreshState();
+            }
+        }
 
-	    safeSet("status-text", "offline");
-	    addHistory("Connection error");
-	}
-}
-
-/* =========================
-   ELECTRUM (alle Details!)
-========================= */
-
-async function loadElectrum() {
-    try {
-        const res = await fetch("electrum.php");
-        const data = await res.json();
-
-        const statusEl = document.getElementById("srv-status");
-        if (statusEl) statusEl.innerText = data.status ?? "-";
-
-        if (data.status === "ok") {
-
-            safeSet("srv-version", data.version);
-            safeSet("srv-protocol", data.protocol);
-            safeSet("blockheight", data.blockheight);
-
-            const fast = data.fee_fast ?? null;
-            const medium = data.fee_medium ?? null;
-            const slow = data.fee_slow ?? null;
-
-            const maxFee = Math.max(fast || 1, medium || 1, slow || 1);
-
-		function setFee(id, value, symbol, tooltip, type) {
-		    const el = document.getElementById(id);
-		    if (!el) return;
-
-		    if (value === null || value === undefined) {
-		        el.innerText = "-";
-		        el.title = "";
-		        return;
-		    }
-
-		    const displayValue = Math.round(value);
-		    const percent = Math.round((displayValue / maxFee) * 100);
-		    const width = Math.min(percent, 100);
-
-		    	// Farbklasse je nach Typ
-			let colorClass = "";
-
-			if (id.includes("fast")) colorClass = "fee-fast";
-			else if (id.includes("medium")) colorClass = "fee-medium";
-			else if (id.includes("slow")) colorClass = "fee-slow";
-
-		    el.innerHTML = `
-		        ${symbol} ${displayValue} sat/vB
-		        <span class="fee-bar-wrap">
-		            <span class="fee-bar ${colorClass}" style="width:${width}%"></span>
-		        </span>
-		        <span class="fee-percent">${percent}%</span>
-		    `;
-
-		    el.title = tooltip;
-		}
-
-		setFee("fee-slow", slow, "🟢", "Slow → cheap", "slow");
-		setFee("fee-medium", medium, "🟡", "Recommended", "medium");
-		setFee("fee-fast", fast, "🔴", "Fastest", "fast");
-
-
+        if (lastBlockChangeTs) {
+            const ageSec = Math.floor((Date.now() - lastBlockChangeTs) / 1000);
+            safeSet("blockfresh", fmtAge(ageSec));
         } else {
-            ["srv-version", "srv-protocol", "blockheight"].forEach(id => safeSet(id, "-"));
-            ["fee-fast", "fee-medium", "fee-slow"].forEach(id => safeSet(id, "-"));
+            safeSet("blockfresh", "-");
+        }
+
+        // Electrum Meta
+        safeSet("srv-version", data.server_version ?? "-");
+        safeSet("srv-protocol", data.protocol ?? "-");
+
+        // Fees
+	const smoothedFees = getSmoothedFees(data.fees || {});
+	renderFees(smoothedFees);
+
+        // Fee hint (kontextabhängig)
+	const feeHintEl = document.getElementById("feeHint") || document.querySelector(".fee-hint");
+	if (feeHintEl) {
+	    const st = (data.mempool_state || "").toLowerCase();
+	    const equal = !!data.fees_equal;
+
+	    if (equal) {
+	        feeHintEl.textContent = "All recommended tiers are currently equal.";
+	    } else if (st === "low") {
+	        feeHintEl.textContent = "Low congestion • Economy or Default is often sufficient.";
+	    } else if (st === "normal") {
+	        feeHintEl.textContent = "Normal congestion • Default is usually a good baseline.";
+	    } else if (st === "high") {
+	        feeHintEl.textContent = "High congestion • Priority can help with faster confirmation.";
+	    } else {
+	        feeHintEl.textContent = "Recommended tiers are practical targets; Peak shows outliers.";
+	    }
+	}
+
+	const feeRangeEl = document.getElementById("feeRange");
+	if (feeRangeEl) {
+	    const min = Number(data.fee_range_min);
+	    const max = Number(data.fee_range_max);
+
+	    if (Number.isFinite(min) && Number.isFinite(max)) {
+	        if (Math.abs(min - max) < 0.0001) {
+	            feeRangeEl.textContent = `Range: ${fmtFee(min)} sat/vB (tiers currently equal)`;
+	        } else {
+	            feeRangeEl.textContent = `Range: ${fmtFee(min)}–${fmtFee(max)} sat/vB`;
+	        }
+	    } else {
+	        feeRangeEl.textContent = "Range: -";
+	    }
+	}
+
+	const feePeakEl = document.getElementById("feePeak");
+	if (feePeakEl) {
+	    const peak = Number(data.fee_peak);
+	    const p90 = Number(data.fee_p90);
+
+	    if (Number.isFinite(peak) && Number.isFinite(p90)) {
+	        feePeakEl.textContent = `Peak observed: ${fmtFee(peak)} sat/vB • High-tier ref: ${fmtFee(p90)} sat/vB`;
+	    } else if (Number.isFinite(peak)) {
+	        feePeakEl.textContent = `Peak observed: ${fmtFee(peak)} sat/vB`;
+	    } else {
+	        feePeakEl.textContent = "Peak observed: -";
+	    }
+	}
+
+        // Mempool badge
+        const mempoolEl = document.getElementById("mempoolState");
+        if (mempoolEl) {
+            const st = (data.mempool_state || "unknown").toLowerCase();
+            const vb = Number.isFinite(Number(data.mempool_vbytes)) ? Number(data.mempool_vbytes) : null;
+
+            mempoolEl.classList.remove("mempool-low", "mempool-normal", "mempool-high");
+
+            let label = "Unknown";
+            if (st === "low") {
+                mempoolEl.classList.add("mempool-low");
+                label = "Low congestion";
+            } else if (st === "normal") {
+                mempoolEl.classList.add("mempool-normal");
+                label = "Normal congestion";
+            } else if (st === "high") {
+                mempoolEl.classList.add("mempool-high");
+                label = "High congestion";
+            }
+
+            const vbTxt = vb !== null ? ` • ${fmtVbytes(vb)}` : "";
+            mempoolEl.textContent = `Mempool: ${label}${vbTxt}`;
         }
 
     } catch (e) {
-        console.log("Electrum fetch failed", e);
+        console.error("STATUS FAIL:", e);
+
+        safeSet("status-text", "offline");
+        const dot = document.getElementById("status-dot");
+        if (dot) {
+            dot.classList.add("offline");
+            dot.classList.remove("online");
+        }
+
+        if (lastConnOk) {
+            addHistory("Connection error");
+            showToast("Connection failed", "error");
+            lastConnOk = false;
+        }
+
+        safeSet("blockfresh", "-");
+        renderFees({});
+
+        // Fee hint reset
+	const feeHintEl = document.getElementById("feeHint") || document.querySelector(".fee-hint");
+	if (feeHintEl) {
+	    feeHintEl.textContent = "Recommended tiers are practical targets; Peak shows outliers.";
+	}
+
+	// Fee range
+	const feeRangeEl = document.getElementById("feeRange");
+	if (feeRangeEl) feeRangeEl.textContent = "Range: -";
+
+	// Fee peak
+	const feePeakEl = document.getElementById("feePeak");
+	if (feePeakEl) feePeakEl.textContent = "Peak observed: -";
+
+        // Mempool badge reset
+        const mempoolEl = document.getElementById("mempoolState");
+        if (mempoolEl) {
+            mempoolEl.classList.remove("mempool-low", "mempool-normal", "mempool-high");
+            mempoolEl.textContent = "Mempool: -";
+        }
     }
-
-lastUpdateTimestamp = Date.now();
-updateLastUpdated();
-
 }
+
 
 /* =========================
    UPTIME
@@ -429,61 +693,54 @@ updateLastUpdated();
 
 async function loadUptime() {
     try {
-        const res = await fetch("uptime.php");
+        const res = await fetch("uptime.php?t=" + Date.now(), { cache: "no-store" });
         const data = await res.json();
-
-	if (!data.length) return;
+        if (!data.length) return;
 
         const el = document.getElementById("uptime");
         if (!el) return;
 
         el.innerHTML = "";
 
+        const scroll = document.createElement("div");
+        scroll.className = "uptime-scroll";
+
+        const bars = document.createElement("div");
+        bars.className = "uptime-bars";
+
         let online = 0;
 
-	data.forEach((e, index) => {
+        data.forEach((e, index) => {
             const d = document.createElement("span");
             d.className = "uptime-dot";
 
-		    // 👉 HIER rein
-		    d.style.borderRadius = "2px";
-		    d.style.marginRight = "2px";
+            if (e.s === 1) {
+                online++;
+                const intensity = (index + 1) / data.length;
+                if (intensity > 0.66) d.style.background = "#73ff8f";
+                else if (intensity > 0.33) d.style.background = "#2fd65a";
+                else d.style.background = "#1f8f43";
+            } else {
+                d.style.background = "#ff5252";
+            }
 
-		if (e.s === 1) {
-		    online++;
-
-		    // Intensität basierend auf Position (neuere Daten = kräftiger)
-		    const intensity = (index + 1) / data.length;
-
-		    if (intensity > 0.66) {
-		        d.style.background = "#4ed440"; // stark
-		    } else if (intensity > 0.33) {
-		        d.style.background = "#2fae2f"; // mittel
-		    } else {
-		        d.style.background = "#1f7a1f"; // schwach
-		    }
-
-		} else {
-		    d.style.background = "#444";
-		}
-
-            el.appendChild(d);
+            bars.appendChild(d);
         });
 
-	const percent = Math.round((online / data.length) * 100);
+        const percent = Math.round((online / data.length) * 100);
+        const label = document.createElement("div");
+        label.className = "uptime-label";
+        label.textContent = `Uptime: ${percent}%`;
 
-	let color = "#4ed440";
-	if (percent < 95) color = "#f1c40f";
-	if (percent < 80) color = "#e74c3c";
-
-	el.innerHTML += `<div style="margin-top:8px; color:${color}">
-	    Uptime: ${percent}%
-	</div>`;
+        scroll.appendChild(bars);
+        el.appendChild(scroll);
+        el.appendChild(label);
 
     } catch (e) {
         console.log("Uptime error", e);
     }
 }
+
 
 /* =========================
    OPEN ELECTRUM
@@ -571,11 +828,6 @@ async function loadBTC() {
     }
 }
 
-
-// startet den Live-Timer genau einmal
-loadBTC();
-setInterval(loadBTC, 30000);
-setInterval(updateLastUpdated, 1000);
 
 </script>
 

@@ -390,42 +390,50 @@ hr {
    FEES
 ========================= */
 
-.fee-row {
-  margin-bottom: 6px;
-}
-
+.fee-line { display:flex; align-items:center; gap:8px; }
+.fee-label { min-width:120px; font-size:12px; }
 .fee-bar-wrap {
-  display: inline-block;
-  width: 86px;
-  height: 6px;
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 6px;
-  margin: 0 8px;
-  overflow: hidden;
-  vertical-align: middle;
+  width:120px; height:8px; border-radius:999px;
+  background:rgba(255,255,255,.12); overflow:hidden; display:inline-block;
+}
+.fee-bar { display:block; height:100%; }
+.fee-fast { background:#ff6b6b; }
+.fee-medium { background:#f1c40f; }
+.fee-slow { background:#4ed440; }
+.fee-percent { font-size:11px; opacity:.8; min-width:32px; text-align:right; }
+
+
+/* =========================
+   MEMPOOL-STATE
+========================= */
+
+.mempool-state {
+  display: inline-block;          /* statt inline-block */
+  margin: 6px auto 0;      /* horizontal zentriert */
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.9);
 }
 
-.fee-bar {
-  display: block;
-  height: 6px;
-  border-radius: 4px;
-  transition: width 0.4s ease;
+.mempool-low {
+  border-color: rgba(78,212,64,0.55);
+  background: rgba(78,212,64,0.14);
+  color: #8dff9c;
+}
+.mempool-normal {
+  border-color: rgba(241,196,15,0.55);
+  background: rgba(241,196,15,0.14);
+  color: #ffd86b;
+}
+.mempool-high {
+  border-color: rgba(231,76,60,0.55);
+  background: rgba(231,76,60,0.14);
+  color: #ff9b8f;
 }
 
-.fee-percent {
-  font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.6);
-}
-
-.fee-fast {
-  background: var(--color-red);
-}
-.fee-medium {
-  background: var(--color-yellow);
-}
-.fee-slow {
-  background: var(--color-green);
-}
 
 /* =========================
    UPTIME
@@ -433,16 +441,45 @@ hr {
 
 #uptime {
   margin-top: 10px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 4px;
+}
+
+.uptime-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  white-space: nowrap;
+  padding-bottom: 4px;
+}
+
+.uptime-bars {
+  display: inline-flex;
+  gap: 2px;
+  flex-wrap: nowrap;
 }
 
 .uptime-dot {
   width: 6px;
-  height: 18px;
-  display: inline-block;
-  margin-right: 2px;
+  height: 16px;
   border-radius: 2px;
-  background: #1a2a1a;
+  flex: 0 0 auto;
+  background: #3a3a3a;
 }
+
+.uptime-dot.online-old { background: #1f8f43; }
+.uptime-dot.online-mid { background: #2fd65a; }
+.uptime-dot.online-new { background: #73ff8f; }
+.uptime-dot.offline    { background: #ff5252; }
+
+.uptime-label {
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(255,255,255,.8);
+}
+
+
 
 /* =========================
    QR
@@ -483,11 +520,17 @@ hr {
 
 .history {
   margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.72);
 }
+
 .history div {
-  padding-left: 2px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
 }
 
 .infra-box,
