@@ -493,10 +493,6 @@ $out = [
     "generated_at" => time()
 ];
 
-// optional temporary debug (remove later if desired)
-//$out["debug_state_dir"] = $stateDir;
-//$out["debug_state_writable"] = $stateDir ? is_writable($stateDir) : false;
-
 // cache write best effort
 if ($cacheFile) {
     @file_put_contents($cacheFile, json_encode($out, JSON_UNESCAPED_SLASHES), LOCK_EX);

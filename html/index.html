@@ -238,10 +238,6 @@ let mempoolStateCandCount = 0;
 
 /* Block pace */
 const BLOCK_PACE_STORAGE_KEY = "green_block_pace_v1";
-let lastChainHeightForPace = null;
-let lastChainTimeForPace = null;
-let blockIntervals = []; // Sekunden pro Block
-const MAX_INTERVALS = 48;
 
 /* =========================
    INIT (einmal beim Laden)
@@ -249,7 +245,6 @@ const MAX_INTERVALS = 48;
 
 document.addEventListener("DOMContentLoaded", async () => {
     loadBlockFreshState();
-    loadBlockPaceState(); // <-- vor updateAll()
 
     await Promise.all([updateAll(), loadUptime(), loadBTC()]);
     startBlockFreshTicker();
@@ -539,76 +534,6 @@ function fmtSecHuman(sec) {
     return `${m}m ${s}s`;
 }
 
-function calcTrend(intervals) {
-    // short vs long moving average
-    if (!Array.isArray(intervals) || intervals.length < 10) {
-        return { arrow: "→", label: "stable" };
-    }
-
-    const shortN = Math.min(6, intervals.length);
-    const longN  = Math.min(24, intervals.length);
-
-    const short = intervals.slice(-shortN);
-    const long  = intervals.slice(-longN);
-
-    const avg = arr => arr.reduce((a,b) => a+b, 0) / arr.length;
-    const sAvg = avg(short);
-    const lAvg = avg(long);
-
-    // Schwellwert gegen Rauschen
-    const threshold = 30; // Sekunden
-
-    if (sAvg > lAvg + threshold) return { arrow: "↑", label: "slower" };
-    if (sAvg < lAvg - threshold) return { arrow: "↓", label: "faster" };
-    return { arrow: "→", label: "stable" };
-}
-
-function loadBlockPaceState() {
-    try {
-        const raw = localStorage.getItem(BLOCK_PACE_STORAGE_KEY);
-        if (!raw) return;
-
-        const obj = JSON.parse(raw);
-        if (!obj || typeof obj !== "object") return;
-
-        if (Number.isFinite(Number(obj.lastChainHeightForPace))) {
-            lastChainHeightForPace = Number(obj.lastChainHeightForPace);
-        }
-        if (Number.isFinite(Number(obj.lastChainTimeForPace))) {
-            lastChainTimeForPace = Number(obj.lastChainTimeForPace);
-        }
-
-        if (Array.isArray(obj.blockIntervals)) {
-            blockIntervals = obj.blockIntervals
-                .map(v => Number(v))
-                .filter(v => Number.isFinite(v) && v >= 60 && v <= 7200)
-                .slice(-MAX_INTERVALS);
-        }
-    } catch (e) {
-        // ignore corrupt storage
-    }
-}
-
-function saveBlockPaceState() {
-    try {
-        const payload = {
-            lastChainHeightForPace,
-            lastChainTimeForPace,
-            blockIntervals: blockIntervals.slice(-MAX_INTERVALS)
-        };
-        localStorage.setItem(BLOCK_PACE_STORAGE_KEY, JSON.stringify(payload));
-    } catch (e) {
-        // ignore quota/private-mode errors
-    }
-}
-
-function resetBlockPaceState() {
-    blockIntervals = [];
-    lastChainHeightForPace = null;
-    lastChainTimeForPace = null;
-    localStorage.removeItem(BLOCK_PACE_STORAGE_KEY);
-}
-
 
 /* =========================
    STATUS (nur Basisdaten!)
@@ -620,7 +545,7 @@ async function updateAll() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
-        // Mempool smoothing (nachdem data existiert)
+        // Mempool smoothing (nur State-Label glätten)
         const stRaw = (data.mempool_state || "unknown").toLowerCase();
         const st = smoothMempoolState(stRaw);
 
@@ -699,60 +624,35 @@ async function updateAll() {
             safeSet("blockfresh", "-");
         }
 
-	// Block pace from chain block_time + height
-	const chainTs = Number(data.block_time);
-	if (Number.isFinite(chainTs) && bh !== null) {
-	    if (lastChainHeightForPace !== null && lastChainTimeForPace !== null) {
-	        const dH = bh - lastChainHeightForPace;
-	        const dT = chainTs - lastChainTimeForPace;
+        // Block pace (nur aus Backend-Daten)
+        const blockPaceEl = document.getElementById("blockPace");
+        if (blockPaceEl) {
+            const avg = Number(data.block_pace_avg_sec);
+            const trend = (data.block_pace_trend || "stable").toLowerCase();
+            const arrow = data.block_pace_arrow || "→";
+            const samples = Number(data.block_pace_samples || 0);
 
-	        // Nur sinnvolle Vorwärtswerte
-	        if (dH > 0 && dT > 0) {
-	            const secPerBlock = dT / dH; // falls mehrere Blöcke übersprungen wurden
-	            if (secPerBlock >= 60 && secPerBlock <= 7200) {
-	                blockIntervals.push(secPerBlock);
-	                if (blockIntervals.length > MAX_INTERVALS) {
-	                    blockIntervals = blockIntervals.slice(-MAX_INTERVALS);
-	                }
-	            }
-	        }
-	    }
+            blockPaceEl.classList.remove("pace-up", "pace-down", "pace-stable");
+            if (trend === "slower") blockPaceEl.classList.add("pace-up");
+            else if (trend === "faster") blockPaceEl.classList.add("pace-down");
+            else blockPaceEl.classList.add("pace-stable");
 
-	    lastChainHeightForPace = bh;
-	    lastChainTimeForPace = chainTs;
-	    saveBlockPaceState();
-	}
+            if (Number.isFinite(avg) && avg > 0 && samples > 0) {
+                const m = Math.floor(avg / 60);
+                const s = Math.round(avg % 60);
+                blockPaceEl.textContent = `⏱️ Block pace: ${m}m ${s}s ${arrow} (${trend}) • ${samples} samples`;
+            } else {
+                blockPaceEl.textContent = "⏱️ Block pace: collecting…";
+            }
+        }
 
-	// Block pace hint
-	const paceHintEl = document.getElementById("blockPaceHint");
-	if (paceHintEl) {
-	    const n = Number(data.block_pace_samples || 0);
-	    paceHintEl.textContent = n < 10
-	      ? "Trend indicator is warming up (collecting more samples)."
-	      : "Trend indicator based on recent found blocks (not a prediction).";
-	}
-
-	// Render badge
-	const blockPaceEl = document.getElementById("blockPace");
-	if (blockPaceEl) {
-	    const avg = Number(data.block_pace_avg_sec);
-	    const trend = (data.block_pace_trend || "stable").toLowerCase();
-	    const arrow = data.block_pace_arrow || "→";
-	    const samples = Number(data.block_pace_samples || 0);
-
-	    blockPaceEl.classList.remove("pace-up", "pace-down", "pace-stable");
-	    if (trend === "slower") blockPaceEl.classList.add("pace-up");
-	    else if (trend === "faster") blockPaceEl.classList.add("pace-down");
-	    else blockPaceEl.classList.add("pace-stable");
-
-	    if (Number.isFinite(avg) && avg > 0) {
-        	const m = Math.floor(avg / 60);
-	        const s = Math.round(avg % 60);
-	        blockPaceEl.textContent = `⏱️ Block pace: ${m}m ${s}s ${arrow} (${trend}) • ${samples} samples`;
-	    } else {
-	        blockPaceEl.textContent = "⏱️ Block pace: collecting…";
-	    }
-	}
+        const paceHintEl = document.getElementById("blockPaceHint");
+        if (paceHintEl) {
+            const n = Number(data.block_pace_samples || 0);
+            paceHintEl.textContent = n < 10
+                ? "Trend indicator is warming up (collecting more samples)."
+                : "Trend indicator based on recent found blocks (not a prediction).";
+        }
 
         // Electrum Meta
         safeSet("srv-version", data.server_version ?? "-");
@@ -789,7 +689,6 @@ async function updateAll() {
             if (vals.length > 0) {
                 const min = Math.min(...vals);
                 const max = Math.max(...vals);
-
                 if (Math.abs(min - max) < 0.0001) {
                     feeRangeEl.textContent = `Range: ${fmtFee(min)} sat/vB (tiers currently equal)`;
                 } else {
@@ -842,6 +741,7 @@ async function updateAll() {
         console.error("STATUS FAIL:", e);
 
         safeSet("status-text", "offline");
+
         const dot = document.getElementById("status-dot");
         if (dot) {
             dot.classList.add("offline");
@@ -868,17 +768,17 @@ async function updateAll() {
         const feePeakEl = document.getElementById("feePeak");
         if (feePeakEl) feePeakEl.textContent = "Peak observed: -";
 
-	const blockPaceEl = document.getElementById("blockPace");
-	if (blockPaceEl) {
-	    blockPaceEl.classList.remove("pace-up", "pace-down", "pace-stable");
-	    blockPaceEl.classList.add("pace-stable");
-	    blockPaceEl.textContent = "⏱️ Block pace: -";
-	}
+        const blockPaceEl = document.getElementById("blockPace");
+        if (blockPaceEl) {
+            blockPaceEl.classList.remove("pace-up", "pace-down", "pace-stable");
+            blockPaceEl.classList.add("pace-stable");
+            blockPaceEl.textContent = "⏱️ Block pace: -";
+        }
 
-	const paceHintEl = document.getElementById("blockPaceHint");
-	if (paceHintEl) {
-	    paceHintEl.textContent = "Trend indicator based on recent found blocks (not a prediction).";
-	}
+        const paceHintEl = document.getElementById("blockPaceHint");
+        if (paceHintEl) {
+            paceHintEl.textContent = "Trend indicator based on recent found blocks (not a prediction).";
+        }
 
         const mempoolEl = document.getElementById("mempoolState");
         if (mempoolEl) {
