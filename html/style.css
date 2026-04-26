@@ -402,13 +402,31 @@ hr {
 .fee-slow { background:#4ed440; }
 .fee-percent { font-size:11px; opacity:.8; min-width:32px; text-align:right; }
 
+.fee-head {
+  margin-bottom: 8px;
+}
+
+.fee-title {
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 1.2;
+  color: #fff;
+}
+
+.fee-subtitle {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(255,255,255,0.72);
+}
+
 
 /* =========================
    MEMPOOL-STATE
 ========================= */
 
 .mempool-state {
-  display: inline-block;          /* statt inline-block */
+  display: table;          /* statt inline-block */
   margin: 6px auto 0;      /* horizontal zentriert */
   padding: 3px 8px;
   border-radius: 999px;
