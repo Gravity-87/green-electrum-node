@@ -95,7 +95,15 @@
 
     <div class="meta">
       <strong>Uptime</strong>
-      <div id="uptime"></div>
+
+	<div id="uptimeKpi" class="uptime-kpi">Uptime 24h: -</div>
+	<div id="uptimeTimeline" class="uptime-timeline"></div>
+		<div class="uptime-legend">
+		  <span>older</span>
+		  <span>newer</span>
+		</div>
+	<div id="uptimeMeta" class="uptime-meta">Incidents (24h): - • Longest outage: - • Coverage: -</div>
+
     </div>
   </div>
 </div>
@@ -221,12 +229,8 @@ let lastUpdateTimestamp = null;
 let historyLog = [];
 let lastNodeStatus = null;
 
-let lastBlockHeight = null;
-let lastBlockChangeTs = null;
 let lastConnOk = true;
 let lastHighLatencyWarnTs = 0;
-
-let blockFreshTickerStarted = false;
 
 let feeStable = { fast: null, medium: null, slow: null };
 let feeCand = { fast: null, medium: null, slow: null };
@@ -236,18 +240,20 @@ let mempoolStateStable = null;
 let mempoolStateCand = null;
 let mempoolStateCandCount = 0;
 
+let blockAgeBaseSec = null;      // letzter serverwert (block_age_sec)
+let blockAgeBaseTsMs = null;     // wann der serverwert ankam (Date.now)
+let blockFreshTickerStarted = false;
+
 /* =========================
    INIT (einmal beim Laden)
 ========================= */
 
 document.addEventListener("DOMContentLoaded", async () => {
-    loadBlockFreshState();
 
     await Promise.all([updateAll(), loadUptime(), loadBTC()]);
-    startBlockFreshTicker();
 
     setInterval(updateAll, 10000);
-    setInterval(loadUptime, 30000);
+    setInterval(loadUptime, 60000);
     setInterval(loadBTC, 30000);
     setInterval(updateLastUpdated, 1000);
 });
@@ -353,32 +359,6 @@ function fmtAge(seconds) {
     return `${h}h ${mm}m ago`;
 }
 
-function startBlockFreshTicker() {
-    if (blockFreshTickerStarted) return;
-    blockFreshTickerStarted = true;
-
-    setInterval(() => {
-        if (!lastBlockChangeTs) return;
-        const ageSec = Math.floor((Date.now() - lastBlockChangeTs) / 1000);
-        safeSet("blockfresh", fmtAge(ageSec));
-    }, 1000);
-}
-
-function loadBlockFreshState() {
-    try {
-        const h = localStorage.getItem("bf_height");
-        const ts = localStorage.getItem("bf_ts");
-        if (h !== null) lastBlockHeight = Number(h);
-        if (ts !== null) lastBlockChangeTs = Number(ts);
-    } catch (_) {}
-}
-
-function saveBlockFreshState() {
-    try {
-        if (lastBlockHeight !== null) localStorage.setItem("bf_height", String(lastBlockHeight));
-        if (lastBlockChangeTs !== null) localStorage.setItem("bf_ts", String(lastBlockChangeTs));
-    } catch (_) {}
-}
 
 function feeWidthAbs(v) {
     v = Number(v);
@@ -586,6 +566,18 @@ function renderPaceSparkline(values, trend = "stable", samples = 0) {
     `;
 }
 
+function startBlockFreshTicker() {
+    if (blockFreshTickerStarted) return;
+    blockFreshTickerStarted = true;
+
+    setInterval(() => {
+        if (!Number.isFinite(blockAgeBaseSec) || !Number.isFinite(blockAgeBaseTsMs)) return;
+        const delta = Math.floor((Date.now() - blockAgeBaseTsMs) / 1000);
+        const liveAge = blockAgeBaseSec + Math.max(0, delta);
+        safeSet("blockfresh", fmtAge(liveAge));
+    }, 1000);
+}
+
 
 /* =========================
    STATUS (nur Basisdaten!)
@@ -653,29 +645,19 @@ async function updateAll() {
             }
         }
 
-        // Blockheight + Block freshness
-        const bh = Number.isFinite(Number(data.blockheight)) ? Number(data.blockheight) : null;
-        safeSet("blockheight", bh ?? "-");
+	// Blockheight + Block freshness (server-basiert + live ticker)
+	const bh = Number.isFinite(Number(data.blockheight)) ? Number(data.blockheight) : null;
+	safeSet("blockheight", bh ?? "-");
 
-        if (bh !== null) {
-            if (lastBlockHeight === null) {
-                lastBlockHeight = bh;
-                if (!lastBlockChangeTs) lastBlockChangeTs = Date.now();
-                saveBlockFreshState();
-            } else if (bh !== lastBlockHeight) {
-                lastBlockHeight = bh;
-                lastBlockChangeTs = Date.now();
-                saveBlockFreshState();
-            }
-        }
-
-        if (lastBlockChangeTs) {
-            const ageSec = Math.floor((Date.now() - lastBlockChangeTs) / 1000);
-            safeSet("blockfresh", fmtAge(ageSec));
-        } else {
-            safeSet("blockfresh", "-");
-        }
-
+	const ageSec = Number(data.block_age_sec);
+	if (Number.isFinite(ageSec) && ageSec >= 0) {
+	    blockAgeBaseSec = ageSec;
+	    blockAgeBaseTsMs = Date.now();
+	    safeSet("blockfresh", fmtAge(ageSec));
+	    startBlockFreshTicker();
+	} else {
+	    safeSet("blockfresh", "-");
+	}
 
 	// Block pace (nur aus Backend-Daten)
 	const blockPaceEl = document.getElementById("blockPace");
@@ -859,61 +841,63 @@ async function updateAll() {
    UPTIME
 ========================= */
 
+function fmtDurSec(sec) {
+    sec = Number(sec || 0);
+    if (!Number.isFinite(sec) || sec <= 0) return "0m";
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 async function loadUptime() {
     try {
         const res = await fetch("uptime.php?t=" + Date.now(), { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
-        if (!Array.isArray(data)) {
-            console.warn("uptime: not an array", data);
-            return;
-        }
+        const kpiEl = document.getElementById("uptimeKpi");
+        const tlEl = document.getElementById("uptimeTimeline");
+        const metaEl = document.getElementById("uptimeMeta");
+        if (!kpiEl || !tlEl || !metaEl) return;
 
-        const el = document.getElementById("uptime");
-        if (!el) return;
+        const pct = Number(data.uptime_24h_pct);
+        kpiEl.textContent = Number.isFinite(pct) ? `Uptime 24h: ${pct.toFixed(1)}%` : "Uptime 24h: -";
 
-        el.innerHTML = "";
+	tlEl.innerHTML = "";
+	const bins = Array.isArray(data.bins) ? data.bins : [];
 
-        const scroll = document.createElement("div");
-        scroll.className = "uptime-scroll";
+	const totalBins = bins.length || 72;
+	const minutesPerBin = 20; // 24h / 72
 
-        const bars = document.createElement("div");
-        bars.className = "uptime-bars";
+	bins.forEach((v, idx) => {
+	    const s = document.createElement("span");
+	    s.className = "uptime-cell " + (v === 1 ? "uptime-up" : v === 0 ? "uptime-down" : "uptime-na");
 
-        let online = 0;
+	    if (idx === bins.length - 1) {
+	        s.classList.add("is-now");
+	    }
 
-        data.forEach((e, index) => {
-            const d = document.createElement("span");
-            d.className = "uptime-dot";
+	    const newerMin = (totalBins - 1 - idx) * minutesPerBin;
+	    const olderMin = newerMin + minutesPerBin;
 
-            // Fallback styles, falls CSS fehlt
-            d.style.display = "inline-block";
-            d.style.width = "8px";
-            d.style.height = "18px";
-            d.style.borderRadius = "2px";
-            d.style.marginRight = "2px";
+	    let statusLabel = "No data";
+	    if (v === 1) statusLabel = "Online";
+	    if (v === 0) statusLabel = "Offline";
 
-            if (Number(e.s) === 1) {
-                online++;
-                const intensity = (index + 1) / data.length;
-                if (intensity > 0.66) d.style.background = "#73ff8f";
-                else if (intensity > 0.33) d.style.background = "#2fd65a";
-                else d.style.background = "#1f8f43";
-            } else {
-                d.style.background = "#ff5252";
-            }
+	    s.title = `${statusLabel} • ~${olderMin}–${newerMin} min ago`;
+	    s.setAttribute("aria-label", s.title);
 
-            bars.appendChild(d);
-        });
+	    tlEl.appendChild(s);
+	});
 
-        const percent = data.length ? (online / data.length) * 100 : 0;
-        const label = document.createElement("div");
-        label.className = "uptime-label";
-        label.textContent = `Uptime: ${percent.toFixed(1)}%`;
+        const incidents = Number(data.incidents_24h);
+        const longest = fmtDurSec(data.longest_outage_sec);
+        const coverage = Number(data.coverage_24h_pct);
 
-        scroll.appendChild(bars);
-        el.appendChild(scroll);
-        el.appendChild(label);
+        metaEl.textContent =
+            `Incidents (24h): ${Number.isFinite(incidents) ? incidents : "-"} • ` +
+            `Longest outage: ${longest} • ` +
+            `Coverage: ${Number.isFinite(coverage) ? coverage.toFixed(1) + "%" : "-"}`;
 
     } catch (e) {
         console.log("Uptime error", e);

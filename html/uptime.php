@@ -33,10 +33,11 @@ $stateDir = pick_state_dir();
 $file = $stateDir . "/uptime.log";
 $lockFile = $stateDir . "/uptime.lock";
 
-$maxEntries = 288;
-$sampleEverySec = 10;
+// logging config
+$maxEntries = 2000;
+$sampleEverySec = 60;
 
-// Ziel prüfen
+// target check (dein Node)
 $host = "192.168.178.56";
 $port = 50001;
 $timeout = 2;
@@ -48,6 +49,7 @@ if ($conn) fclose($conn);
 $now = time();
 $lines = [];
 
+// lock for read-modify-write
 $lockFp = @fopen($lockFile, "c");
 if ($lockFp && @flock($lockFp, LOCK_EX)) {
     if (file_exists($file)) {
@@ -57,7 +59,6 @@ if ($lockFp && @flock($lockFp, LOCK_EX)) {
 
     $lastTs = null;
     $lastSt = null;
-
     if (!empty($lines)) {
         $lastParsed = parse_line($lines[count($lines) - 1]);
         if ($lastParsed) {
@@ -67,13 +68,12 @@ if ($lockFp && @flock($lockFp, LOCK_EX)) {
     }
 
     $shouldAppend = false;
-
     if ($lastTs === null) {
         $shouldAppend = true;
     } elseif (($now - $lastTs) >= $sampleEverySec) {
         $shouldAppend = true;
     } elseif ($lastSt !== null && ((int)$lastSt !== (int)$currentStatus)) {
-        $shouldAppend = true; // Statuswechsel sofort speichern
+        $shouldAppend = true; // status change immediately
     }
 
     if ($shouldAppend) {
@@ -90,18 +90,94 @@ if ($lockFp && @flock($lockFp, LOCK_EX)) {
 }
 if ($lockFp) @fclose($lockFp);
 
-// Ausgabe
-$data = [];
+// parse all valid points
+$allPoints = [];
 foreach ($lines as $line) {
     $p = parse_line($line);
-    if ($p) {
-        $data[] = ["t" => (int)$p[0], "s" => (int)$p[1]];
+    if ($p) $allPoints[] = ["t" => (int)$p[0], "s" => (int)$p[1]];
+}
+if (empty($allPoints)) {
+    $allPoints[] = ["t" => $now, "s" => $currentStatus];
+}
+
+// ---- 24h aggregation ----
+$windowSec = 86400;       // 24h
+$binCount = 72;           // 20-min bins
+$binSec = (int)($windowSec / $binCount);
+$cutoff = $now - $windowSec;
+
+// points in window
+$points = [];
+foreach ($allPoints as $pt) {
+    if ($pt["t"] >= $cutoff) $points[] = $pt;
+}
+if (empty($points)) {
+    $points[] = ["t" => $now, "s" => $currentStatus];
+}
+
+// bin majority
+$bins = array_fill(0, $binCount, null); // null=no data, 1=up, 0=down
+$upCount = array_fill(0, $binCount, 0);
+$totalCount = array_fill(0, $binCount, 0);
+
+foreach ($points as $pt) {
+    $idx = (int)floor(($pt["t"] - $cutoff) / $binSec);
+    if ($idx < 0) $idx = 0;
+    if ($idx >= $binCount) $idx = $binCount - 1;
+
+    $totalCount[$idx] += 1;
+    if ((int)$pt["s"] === 1) $upCount[$idx] += 1;
+}
+
+for ($i = 0; $i < $binCount; $i++) {
+    if ($totalCount[$i] === 0) {
+        $bins[$i] = null;
+    } else {
+        $bins[$i] = ($upCount[$i] / $totalCount[$i] >= 0.5) ? 1 : 0;
     }
 }
 
-// Falls noch leer, wenigstens aktuellen Punkt liefern
-if (empty($data)) {
-    $data[] = ["t" => $now, "s" => $currentStatus];
+// uptime % + coverage
+$known = 0;
+$up = 0;
+foreach ($bins as $b) {
+    if ($b === null) continue;
+    $known++;
+    if ($b === 1) $up++;
+}
+$uptimePct = $known > 0 ? round(($up / $known) * 100, 1) : null;
+$coveragePct = round(($known / $binCount) * 100, 1);
+
+// incidents + longest outage (from transitions in 24h points)
+usort($points, function($a, $b) { return $a["t"] <=> $b["t"]; });
+
+$incidents = 0;
+$longestOutageSec = 0;
+$outageStart = null;
+$prev = null;
+
+foreach ($points as $pt) {
+    if ($prev !== null) {
+        if ((int)$prev["s"] === 1 && (int)$pt["s"] === 0) {
+            $incidents++;
+            $outageStart = $pt["t"];
+        } elseif ((int)$prev["s"] === 0 && (int)$pt["s"] === 1 && $outageStart !== null) {
+            $dur = $pt["t"] - $outageStart;
+            if ($dur > $longestOutageSec) $longestOutageSec = $dur;
+            $outageStart = null;
+        }
+    }
+    $prev = $pt;
+}
+if ($outageStart !== null) {
+    $dur = $now - $outageStart;
+    if ($dur > $longestOutageSec) $longestOutageSec = $dur;
 }
 
-echo json_encode($data, JSON_UNESCAPED_SLASHES);
+echo json_encode([
+    "uptime_24h_pct" => $uptimePct,
+    "coverage_24h_pct" => $coveragePct,
+    "bins" => $bins,
+    "incidents_24h" => $incidents,
+    "longest_outage_sec" => $longestOutageSec
+], JSON_UNESCAPED_SLASHES);
