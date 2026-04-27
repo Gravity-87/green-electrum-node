@@ -55,11 +55,11 @@
       <div class="stat-row"><span>🕒 Last seen</span><strong id="lastseen">...</strong></div>
       <div class="stat-row"><span>⛓️ Blockheight</span><strong id="blockheight">...</strong></div>
       <div class="stat-row"><span>🧱 Block freshness</span><strong id="blockfresh">...</strong></div>
-      <div class="stat-row" id="blockPace">⏱️ Block pace: -</div>
+	<div class="stat-row" id="blockPace">⏱️ Block pace: collecting…</div>
+		<svg id="blockPaceSparkline" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"></svg>
 	<div class="sub-hint" id="blockPaceHint">
-	  (Block pace: Trend indicator based on recent found blocks (not a prediction))
+	  Trend indicator is warming up (collecting more samples).
 	</div>
-
     </div>
 
     <div class="divider"></div>
@@ -235,9 +235,6 @@ let feeCandCount = { fast: 0, medium: 0, slow: 0 };
 let mempoolStateStable = null;
 let mempoolStateCand = null;
 let mempoolStateCandCount = 0;
-
-/* Block pace */
-const BLOCK_PACE_STORAGE_KEY = "green_block_pace_v1";
 
 /* =========================
    INIT (einmal beim Laden)
@@ -526,12 +523,67 @@ function smoothMempoolState(incoming) {
     return mempoolStateStable;
 }
 
-
 function fmtSecHuman(sec) {
     if (!Number.isFinite(sec) || sec <= 0) return "-";
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
     return `${m}m ${s}s`;
+}
+
+function paceConfidence(samples) {
+    const n = Number(samples || 0);
+    if (n < 10) return "low confidence";
+    if (n < 30) return "medium confidence";
+    return "high confidence";
+}
+
+function paceConfidence(samples) {
+    const n = Number(samples || 0);
+    if (n < 10) return "low confidence";
+    if (n < 30) return "medium confidence";
+    return "high confidence";
+}
+
+function renderPaceSparkline(values, trend = "stable", samples = 0) {
+    const svg = document.getElementById("blockPaceSparkline");
+    if (!svg) return;
+
+    const vals = (Array.isArray(values) ? values : [])
+        .map(Number)
+        .filter(v => Number.isFinite(v) && v > 0);
+
+    if (vals.length < 2) {
+        svg.innerHTML = "";
+        return;
+    }
+
+    const w = 120, h = 28, pad = 2;
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const span = Math.max(1, max - min);
+
+    const pts = vals.map((v, i) => {
+        const x = (i / (vals.length - 1)) * (w - pad * 2) + pad;
+        const y = h - pad - ((v - min) / span) * (h - pad * 2);
+        return [x, y];
+    });
+
+    const d = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p[0].toFixed(2)} ${p[1].toFixed(2)}`).join(" ");
+    const areaD = `${d} L ${pts[pts.length - 1][0].toFixed(2)} ${(h - pad).toFixed(2)} L ${pts[0][0].toFixed(2)} ${(h - pad).toFixed(2)} Z`;
+
+    let lineColor = "#ffeaa7"; // stable
+    let areaColor = "rgba(255,234,167,0.18)";
+    if (trend === "faster") { lineColor = "#55efc4"; areaColor = "rgba(85,239,196,0.18)"; }
+    if (trend === "slower") { lineColor = "#ff7675"; areaColor = "rgba(255,118,117,0.18)"; }
+
+    const warmingUp = Number(samples) < 10;
+    const dash = warmingUp ? `stroke-dasharray="3 3"` : "";
+    const lineOpacity = warmingUp ? `stroke-opacity="0.85"` : `stroke-opacity="1"`;
+
+    svg.innerHTML = `
+      <path class="area" d="${areaD}" fill="${areaColor}"></path>
+      <path class="line" d="${d}" stroke="${lineColor}" ${dash} ${lineOpacity}></path>
+    `;
 }
 
 
@@ -624,35 +676,47 @@ async function updateAll() {
             safeSet("blockfresh", "-");
         }
 
-        // Block pace (nur aus Backend-Daten)
-        const blockPaceEl = document.getElementById("blockPace");
-        if (blockPaceEl) {
-            const avg = Number(data.block_pace_avg_sec);
-            const trend = (data.block_pace_trend || "stable").toLowerCase();
-            const arrow = data.block_pace_arrow || "→";
-            const samples = Number(data.block_pace_samples || 0);
 
-            blockPaceEl.classList.remove("pace-up", "pace-down", "pace-stable");
-            if (trend === "slower") blockPaceEl.classList.add("pace-up");
-            else if (trend === "faster") blockPaceEl.classList.add("pace-down");
-            else blockPaceEl.classList.add("pace-stable");
+	// Block pace (nur aus Backend-Daten)
+	const blockPaceEl = document.getElementById("blockPace");
+	if (blockPaceEl) {
+	    const avg = Number(data.block_pace_avg_sec);
+	    const trend = (data.block_pace_trend || "stable").toLowerCase();
+	    const arrow = data.block_pace_arrow || "→";
+	    const samples = Number(data.block_pace_samples || 0);
+	    const isOffline = (status !== "online");
 
-            if (Number.isFinite(avg) && avg > 0 && samples > 0) {
-                const m = Math.floor(avg / 60);
-                const s = Math.round(avg % 60);
-                blockPaceEl.textContent = `⏱️ Block pace: ${m}m ${s}s ${arrow} (${trend}) • ${samples} samples`;
-            } else {
-                blockPaceEl.textContent = "⏱️ Block pace: collecting…";
-            }
-        }
+	    blockPaceEl.classList.remove("pace-up", "pace-down", "pace-stable");
+	    if (trend === "slower") blockPaceEl.classList.add("pace-up");
+	    else if (trend === "faster") blockPaceEl.classList.add("pace-down");
+	    else blockPaceEl.classList.add("pace-stable");
 
-        const paceHintEl = document.getElementById("blockPaceHint");
-        if (paceHintEl) {
-            const n = Number(data.block_pace_samples || 0);
-            paceHintEl.textContent = n < 10
-                ? "Trend indicator is warming up (collecting more samples)."
-                : "Trend indicator based on recent found blocks (not a prediction).";
-        }
+	    if (Number.isFinite(avg) && avg > 0 && samples > 0) {
+	        const m = Math.floor(avg / 60);
+	        const s = Math.round(avg % 60);
+	        const suffix = isOffline ? " • last known" : "";
+	        blockPaceEl.textContent = `⏱️ Block pace: ${m}m ${s}s ${arrow} (${trend}) • ${samples} samples${suffix}`;
+	    } else {
+	        blockPaceEl.textContent = "⏱️ Block pace: collecting…";
+	    }
+
+	    // Sparkline rendern
+	    renderPaceSparkline(data.block_pace_recent_sec || [], trend, samples);
+	}
+
+	const paceHintEl = document.getElementById("blockPaceHint");
+	if (paceHintEl) {
+	    const n = Number(data.block_pace_samples || 0);
+	    const conf = paceConfidence(n);
+
+	    if (status !== "online") {
+	        paceHintEl.textContent = `Node offline — showing last known trend snapshot (${conf}).`;
+	    } else if (n < 10) {
+	        paceHintEl.textContent = `Trend indicator is warming up (collecting more samples, ${conf}).`;
+	    } else {
+	        paceHintEl.textContent = `Trend indicator based on recent found blocks (not a prediction, ${conf}).`;
+	    }
+	}
 
         // Electrum Meta
         safeSet("srv-version", data.server_version ?? "-");
@@ -780,6 +844,8 @@ async function updateAll() {
             paceHintEl.textContent = "Trend indicator based on recent found blocks (not a prediction).";
         }
 
+	renderPaceSparkline([], "stable", 0);
+
         const mempoolEl = document.getElementById("mempoolState");
         if (mempoolEl) {
             mempoolEl.classList.remove("mempool-low", "mempool-normal", "mempool-high");
@@ -797,7 +863,11 @@ async function loadUptime() {
     try {
         const res = await fetch("uptime.php?t=" + Date.now(), { cache: "no-store" });
         const data = await res.json();
-        if (!data.length) return;
+
+        if (!Array.isArray(data)) {
+            console.warn("uptime: not an array", data);
+            return;
+        }
 
         const el = document.getElementById("uptime");
         if (!el) return;
@@ -816,7 +886,14 @@ async function loadUptime() {
             const d = document.createElement("span");
             d.className = "uptime-dot";
 
-            if (e.s === 1) {
+            // Fallback styles, falls CSS fehlt
+            d.style.display = "inline-block";
+            d.style.width = "8px";
+            d.style.height = "18px";
+            d.style.borderRadius = "2px";
+            d.style.marginRight = "2px";
+
+            if (Number(e.s) === 1) {
                 online++;
                 const intensity = (index + 1) / data.length;
                 if (intensity > 0.66) d.style.background = "#73ff8f";
@@ -829,10 +906,10 @@ async function loadUptime() {
             bars.appendChild(d);
         });
 
-        const percent = Math.round((online / data.length) * 100);
+        const percent = data.length ? (online / data.length) * 100 : 0;
         const label = document.createElement("div");
         label.className = "uptime-label";
-        label.textContent = `Uptime: ${percent}%`;
+        label.textContent = `Uptime: ${percent.toFixed(1)}%`;
 
         scroll.appendChild(bars);
         el.appendChild(scroll);

@@ -1,4 +1,7 @@
 <?php
+/* Warnings nicht ins .json leaken lassen */
+ini_set('display_errors', '0');
+
 $host = "192.168.178.56";
 $port = 50001;
 $timeout = 3;
@@ -26,6 +29,7 @@ $stateDir = pick_state_dir();
 $cacheFile     = $stateDir ? $stateDir . "/status_cache.json" : null;
 $lastSeenFile  = $stateDir ? $stateDir . "/last_seen.txt" : null;
 $paceStateFile = $stateDir ? $stateDir . "/block_pace_state.json" : null;
+$paceLockFile  = $stateDir ? $stateDir . "/block_pace.lock" : null;
 
 $cacheTtl = 3; // seconds
 
@@ -149,23 +153,27 @@ function fee_from_histogram($hist, $targetVbytes) {
 
 /* ===== Block pace persistence ===== */
 function load_pace_state($file) {
-    if (!$file) return ["last_height" => null, "last_time" => null, "samples" => []];
-    if (!file_exists($file)) return ["last_height" => null, "last_time" => null, "samples" => []];
+    $empty = ["last_height" => null, "last_time" => null, "samples" => []];
+    if (!$file || !file_exists($file)) return $empty;
 
     $raw = @file_get_contents($file);
     $obj = $raw ? json_decode($raw, true) : null;
-    if (!is_array($obj)) return ["last_height" => null, "last_time" => null, "samples" => []];
+    if (!is_array($obj)) return $empty;
 
-    $obj["last_height"] = isset($obj["last_height"]) ? intval($obj["last_height"]) : null;
-    $obj["last_time"]   = isset($obj["last_time"]) ? intval($obj["last_time"]) : null;
-    $obj["samples"]     = (isset($obj["samples"]) && is_array($obj["samples"])) ? $obj["samples"] : [];
-
-    return $obj;
+    return [
+        "last_height" => (isset($obj["last_height"]) && is_numeric($obj["last_height"])) ? intval($obj["last_height"]) : null,
+        "last_time"   => (isset($obj["last_time"]) && is_numeric($obj["last_time"])) ? intval($obj["last_time"]) : null,
+        "samples"     => (isset($obj["samples"]) && is_array($obj["samples"])) ? $obj["samples"] : [],
+    ];
 }
 
 function save_pace_state($file, $state) {
-    if (!$file) return;
-    @file_put_contents($file, json_encode($state, JSON_UNESCAPED_SLASHES), LOCK_EX);
+    if (!$file) return false;
+    $tmp = $file . ".tmp";
+    $json = json_encode($state, JSON_UNESCAPED_SLASHES);
+    if ($json === false) return false;
+    if (@file_put_contents($tmp, $json, LOCK_EX) === false) return false;
+    return @rename($tmp, $file); // atomar
 }
 
 function prune_pace_samples($samples, $ttlHours, $maxSamples) {
@@ -275,7 +283,27 @@ $blockPaceTrend = "stable";
 $blockPaceArrow = "→";
 $blockPaceSamples = 0;
 
+$blockPaceRecentSec = [];
+
 $uptime = "-";
+
+
+// Preload last known block pace for offline display
+$paceSnapshot = load_pace_state($paceStateFile);
+$paceSnapshot["samples"] = prune_pace_samples($paceSnapshot["samples"], $paceTtlHours, $paceMaxSamples);
+
+$blockPaceSamples = count($paceSnapshot["samples"]);
+if ($blockPaceSamples > 0) {
+    $sum = 0.0;
+    foreach ($paceSnapshot["samples"] as $s) $sum += floatval($s["sec"]);
+    $blockPaceAvgSec = round($sum / $blockPaceSamples, 1);
+
+    $tr = pace_trend_from_samples($paceSnapshot["samples"]);
+    $blockPaceTrend = $tr["trend"];
+    $blockPaceArrow = $tr["arrow"];
+}
+
+
 
 /* =========================
    ELECTRUM DATA
@@ -297,45 +325,64 @@ if ($status === "online") {
         if ($blockTime) $blockAgeSec = max(0, time() - $blockTime);
     }
 
-    // block pace (server persistent)
-    $pace = load_pace_state($paceStateFile);
+// block pace (server persistent, locked update)
+if ($paceStateFile && $paceLockFile) {
+    $lockFp = @fopen($paceLockFile, "c");
 
-    if (is_numeric($blockheight) && is_numeric($blockTime)) {
-        $lastH = $pace["last_height"];
-        $lastT = $pace["last_time"];
+    if ($lockFp && @flock($lockFp, LOCK_EX)) {
+        $pace = load_pace_state($paceStateFile);
 
-        if (is_numeric($lastH) && is_numeric($lastT)) {
-            $dH = intval($blockheight) - intval($lastH);
-            $dT = intval($blockTime) - intval($lastT);
+        if (is_numeric($blockheight) && is_numeric($blockTime)) {
+            $lastH = $pace["last_height"];
+            $lastT = $pace["last_time"];
 
-            if ($dH > 0 && $dT > 0) {
-                $secPerBlock = $dT / $dH;
-                if ($secPerBlock >= 60 && $secPerBlock <= 7200) {
-                    $pace["samples"][] = [
-                        "sec" => round($secPerBlock, 2),
-                        "ts"  => time()
-                    ];
+            if (is_numeric($lastH) && is_numeric($lastT)) {
+                $dH = intval($blockheight) - intval($lastH);
+                $dT = intval($blockTime) - intval($lastT);
+
+                if ($dH > 0 && $dT > 0) {
+                    $secPerBlock = $dT / $dH;
+                    if ($secPerBlock >= 60 && $secPerBlock <= 7200) {
+                        $pace["samples"][] = [
+                            "sec" => round($secPerBlock, 2),
+                            "ts"  => time()
+                        ];
+                    }
                 }
             }
+
+            $pace["last_height"] = intval($blockheight);
+            $pace["last_time"]   = intval($blockTime);
         }
 
-        $pace["last_height"] = intval($blockheight);
-        $pace["last_time"]   = intval($blockTime);
+        $pace["samples"] = prune_pace_samples($pace["samples"], $paceTtlHours, $paceMaxSamples);
+        save_pace_state($paceStateFile, $pace);
+
+        $blockPaceSamples = count($pace["samples"]);
+        if ($blockPaceSamples > 0) {
+            $sum = 0.0;
+            foreach ($pace["samples"] as $s) $sum += floatval($s["sec"]);
+            $blockPaceAvgSec = round($sum / $blockPaceSamples, 1);
+
+            $tr = pace_trend_from_samples($pace["samples"]);
+            $blockPaceTrend = $tr["trend"];
+            $blockPaceArrow = $tr["arrow"];
+        }
+
+        // recent series for sparkline (last 24)
+        $recent = array_slice($pace["samples"], -24);
+        $blockPaceRecentSec = [];
+        foreach ($recent as $r) {
+            $v = isset($r["sec"]) ? floatval($r["sec"]) : null;
+            if (is_numeric($v) && $v > 0) $blockPaceRecentSec[] = $v;
+        }
+
+        @flock($lockFp, LOCK_UN);
     }
 
-    $pace["samples"] = prune_pace_samples($pace["samples"], $paceTtlHours, $paceMaxSamples);
-    save_pace_state($paceStateFile, $pace);
+    if ($lockFp) @fclose($lockFp);
+}
 
-    $blockPaceSamples = count($pace["samples"]);
-    if ($blockPaceSamples > 0) {
-        $sum = 0.0;
-        foreach ($pace["samples"] as $s) $sum += floatval($s["sec"]);
-        $blockPaceAvgSec = round($sum / $blockPaceSamples, 1);
-
-        $tr = pace_trend_from_samples($pace["samples"]);
-        $blockPaceTrend = $tr["trend"];
-        $blockPaceArrow = $tr["arrow"];
-    }
 
     // server.version
     $resVersion = electrum_request($host, $port, [
@@ -488,6 +535,8 @@ $out = [
     "block_pace_trend" => $blockPaceTrend,
     "block_pace_arrow" => $blockPaceArrow,
     "block_pace_samples" => $blockPaceSamples,
+
+    "block_pace_recent_sec" => $blockPaceRecentSec,
 
     "uptime" => $uptime,
     "generated_at" => time()
