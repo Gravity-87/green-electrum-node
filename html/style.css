@@ -474,7 +474,7 @@ hr {
 #blockPaceSparkline {
   display: block;
   width: 100%;
-  height: 28px;
+  height: 80px;
   margin-top: 4px;
   opacity: 0.95;
 }
@@ -563,14 +563,6 @@ hr {
   opacity: 0.8;
 }
 
-.uptime-legend {
-  margin-top: 4px;
-  display: flex;
-  justify-content: space-between;
-  font-size: 11px;
-  opacity: 0.65;
-}
-
 .uptime-timeline .uptime-cell:last-child {
   outline: 1px solid rgba(255,255,255,0.45); /* markiert "jetzt" */
 }
@@ -580,8 +572,39 @@ hr {
 }
 
 .uptime-cell.is-now {
-  outline: 1px solid rgba(255, 255, 255, 0.75);
-  box-shadow: 0 0 0 1px rgba(255,255,255,0.15) inset;
+  position: relative;
+  outline: 2px solid #fff;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.35), 0 0 8px rgba(255,255,255,0.35);
+  transform: scaleY(1.25);
+  z-index: 1;
+}
+
+.uptime-legend {
+  margin-top: 6px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.u-lg {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+
+.u-up { background: #2fd65a; }
+.u-down { background: #ff5252; }
+.u-na { background: rgba(255,255,255,0.14); }
+
+.u-now {
+  background: transparent;
+  outline: 2px solid #fff;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.35);
 }
 
 

@@ -55,8 +55,9 @@
       <div class="stat-row"><span>🕒 Last seen</span><strong id="lastseen">...</strong></div>
       <div class="stat-row"><span>⛓️ Blockheight</span><strong id="blockheight">...</strong></div>
       <div class="stat-row"><span>🧱 Block freshness</span><strong id="blockfresh">...</strong></div>
-	<div class="stat-row" id="blockPace">⏱️ Block pace: collecting…</div>
+	<div class="stat-row" id="blockPace">⏱️ Block pace trend: collecting…</div>
 		<svg id="blockPaceSparkline" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"></svg>
+		<div class="sub-hint" id="blockPaceAxisHint" style="margin-top:-20px;text-align: center;">Baseline: 10 minutes per block</div>
 	<div class="sub-hint" id="blockPaceHint">
 	  Trend indicator is warming up (collecting more samples).
 	</div>
@@ -103,6 +104,13 @@
 		  <span>newer</span>
 		</div>
 	<div id="uptimeMeta" class="uptime-meta">Incidents (24h): - • Longest outage: - • Coverage: -</div>
+
+	<div class="uptime-legend">
+	  <span><i class="u-lg u-up"></i> online</span>
+	  <span><i class="u-lg u-down"></i> offline</span>
+	  <span><i class="u-lg u-na"></i> no data</span>
+	  <span><i class="u-lg u-now"></i> now</span>
+	</div>
 
     </div>
   </div>
@@ -512,16 +520,9 @@ function fmtSecHuman(sec) {
 
 function paceConfidence(samples) {
     const n = Number(samples || 0);
-    if (n < 10) return "low confidence";
-    if (n < 30) return "medium confidence";
-    return "high confidence";
-}
-
-function paceConfidence(samples) {
-    const n = Number(samples || 0);
-    if (n < 10) return "low confidence";
-    if (n < 30) return "medium confidence";
-    return "high confidence";
+    if (n < 10) return "< 10 samples --> low confidence";
+    if (n < 30) return "< 30 samples --> medium confidence";
+    return ">= 30 samples --> high confidence";
 }
 
 function renderPaceSparkline(values, trend = "stable", samples = 0) {
@@ -565,6 +566,65 @@ function renderPaceSparkline(values, trend = "stable", samples = 0) {
       <path class="line" d="${d}" stroke="${lineColor}" ${dash} ${lineOpacity}></path>
     `;
 }
+
+function renderPaceDeviationChart(values, trend = "stable", samples = 0) {
+    const svg = document.getElementById("blockPaceSparkline");
+    if (!svg) return;
+
+    const vals = (Array.isArray(values) ? values : [])
+        .map(Number)
+        .filter(v => Number.isFinite(v) && v > 0);
+
+    if (vals.length < 2) {
+        svg.innerHTML = "";
+        return;
+    }
+
+    const w = 120, h = 56, padX = 6, padY = 6;
+    const yMid = h / 2;
+    const targetSec = 600; // 10m
+
+    // deviation in minutes (+ slower, - faster)
+    const dev = vals.map(v => (v - targetSec) / 60);
+    const maxAbs = Math.max(1, ...dev.map(d => Math.abs(d)));
+
+    // visueller Verstärker
+    const visualGain = 1.8;
+    const baseScale = (yMid - padY) / maxAbs;
+
+    const xAt = i => (i / (vals.length - 1)) * (w - 2 * padX) + padX;
+    const yAt = d => {
+        let y = yMid - (d * baseScale * visualGain);
+        if (y < padY) y = padY;
+        if (y > h - padY) y = h - padY;
+        return y;
+    };
+
+    let lineColor = "#ffeaa7";
+    if (trend === "faster") lineColor = "#55efc4";
+    if (trend === "slower") lineColor = "#ff7675";
+
+    const warmingUp = Number(samples) < 10;
+    const dash = warmingUp ? `stroke-dasharray="3 3"` : "";
+
+    let html = `<line x1="${padX}" y1="${yMid}" x2="${w - padX}" y2="${yMid}" stroke="rgba(255,255,255,0.35)" stroke-width="1"/>`;
+
+    dev.forEach((d, i) => {
+        const x = xAt(i);
+        const y = yAt(d);
+	// Balken: stroke-width=
+        const c = d > 0 ? "rgba(255,118,117,0.55)" : d < 0 ? "rgba(85,239,196,0.55)" : "rgba(255,234,167,0.40)";
+        html += `<line x1="${x}" y1="${yMid}" x2="${x}" y2="${y}" stroke="${c}" stroke-width="2"/>`;
+    });
+
+    // Sparkline: stroke-width=
+    const path = dev.map((d, i) => `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(2)} ${yAt(d).toFixed(2)}`).join(" ");
+    html += `<path d="${path}" fill="none" stroke="${lineColor}" stroke-width="1.2" ${dash} stroke-linecap="round" stroke-linejoin="round"/>`;
+
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    svg.innerHTML = html;
+}
+
 
 function startBlockFreshTicker() {
     if (blockFreshTickerStarted) return;
@@ -677,13 +737,15 @@ async function updateAll() {
 	        const m = Math.floor(avg / 60);
 	        const s = Math.round(avg % 60);
 	        const suffix = isOffline ? " • last known" : "";
-	        blockPaceEl.textContent = `⏱️ Block pace: ${m}m ${s}s ${arrow} (${trend}) • ${samples} samples${suffix}`;
+	        blockPaceEl.textContent = `⏱️ Block pace trend: ${m}m ${s}s ${arrow} (${trend}) • ${samples} samples${suffix}`;
 	    } else {
-	        blockPaceEl.textContent = "⏱️ Block pace: collecting…";
+	        blockPaceEl.textContent = "⏱️ Block pace trend: collecting data…";
 	    }
 
 	    // Sparkline rendern
-	    renderPaceSparkline(data.block_pace_recent_sec || [], trend, samples);
+		//renderPaceSparkline(data.block_pace_recent_sec || [], trend, samples);
+	    //Deviation rendern
+		renderPaceDeviationChart(data.block_pace_recent_sec || [], trend, samples);
 	}
 
 	const paceHintEl = document.getElementById("blockPaceHint");
@@ -696,7 +758,7 @@ async function updateAll() {
 	    } else if (n < 10) {
 	        paceHintEl.textContent = `Trend indicator is warming up (collecting more samples, ${conf}).`;
 	    } else {
-	        paceHintEl.textContent = `Trend indicator based on recent found blocks (not a prediction, ${conf}).`;
+	        paceHintEl.textContent = `Indicator based on recent found blocks (not a prediction, ${conf}).`;
 	    }
 	}
 
@@ -818,7 +880,7 @@ async function updateAll() {
         if (blockPaceEl) {
             blockPaceEl.classList.remove("pace-up", "pace-down", "pace-stable");
             blockPaceEl.classList.add("pace-stable");
-            blockPaceEl.textContent = "⏱️ Block pace: -";
+            blockPaceEl.textContent = "⏱️ Block pace trend: -";
         }
 
         const paceHintEl = document.getElementById("blockPaceHint");
@@ -894,10 +956,11 @@ async function loadUptime() {
         const longest = fmtDurSec(data.longest_outage_sec);
         const coverage = Number(data.coverage_24h_pct);
 
-        metaEl.textContent =
-            `Incidents (24h): ${Number.isFinite(incidents) ? incidents : "-"} • ` +
-            `Longest outage: ${longest} • ` +
-            `Coverage: ${Number.isFinite(coverage) ? coverage.toFixed(1) + "%" : "-"}`;
+	metaEl.textContent =
+	  `Incidents (24h): ${Number.isFinite(incidents) ? incidents : "-"} • ` +
+	  `Longest outage: ${longest} • ` +
+	  `Coverage: ${Number.isFinite(coverage) ? coverage.toFixed(1) + "%" : "-"} • ` +
+	  `request-based sampling`;
 
     } catch (e) {
         console.log("Uptime error", e);
@@ -962,32 +1025,46 @@ function addHistory(message) {
 
 async function loadBTC() {
     try {
-        const res = await fetch("btcinfo.php");
+        const res = await fetch("btcinfo.php?t=" + Date.now(), { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
         const data = await res.json();
+        if (data.error) throw new Error(data.error);
 
         const v = document.getElementById("btc-version");
         const s = document.getElementById("btc-sync");
         const h = document.getElementById("btc-height");
 
-	const clean = (data.version || "").match(/:([0-9.]+)\//);
+        // version: z.B. "/Satoshi:30.2.0/" -> "30.2.0"
+        const rawVersion = data.version || "-";
+        const m = String(rawVersion).match(/:([0-9.]+)\//);
+        if (v) v.innerText = m ? m[1] : rawVersion;
 
-        /* if (v) v.innerText = data.version.replace(/\//g, ""); */
-	if (v) v.innerText = clean ? clean[1] : (data.version || "-");
-        if (h) h.innerText = data.blocks;
+        // blockheight aus btcinfo.php: "blocks"
+        const blocks = Number(data.blocks);
+        if (h) h.innerText = Number.isFinite(blocks) ? blocks : "-";
 
+        // sync aus btcinfo.php: "sync" = "synced" | "syncing"
+        const isSynced = String(data.sync).toLowerCase() === "synced";
         if (s) {
-            if (data.sync === "synced") {
-                s.innerText = "synced";
-                s.style.color = "#4ed440";
-            } else {
-                s.innerText = "syncing";
-                s.style.color = "#f1c40f";
-            }
+            s.innerText = isSynced ? "synced" : "syncing";
+            s.style.color = isSynced ? "#4ed440" : "#f1c40f";
         }
 
     } catch (e) {
         console.log("BTC load failed", e);
         showToast("BTC backend unavailable", "warning");
+
+        const v = document.getElementById("btc-version");
+        const s = document.getElementById("btc-sync");
+        const h = document.getElementById("btc-height");
+
+        if (v) v.innerText = "-";
+        if (h) h.innerText = "-";
+        if (s) {
+            s.innerText = "-";
+            s.style.color = "";
+        }
     }
 }
 

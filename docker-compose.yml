@@ -4,7 +4,7 @@ services:
     container_name: green-electrum-web
     volumes:
       - ./html:/var/www/html
-      - /home/umbrel/umbrel/app-data/bitcoin/data/bitcoin/.cookie:/run/bitcoin/.cookie:ro
+      - /home/umbrel/umbrel/app-data/bitcoin/data:/run/bitcoin-data:ro
       - /home/umbrel/green-electrum-site/data:/state
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -43,3 +43,15 @@ services:
     security_opt:
       - no-new-privileges:true
     pids_limit: 100
+
+  btcinfo:
+    image: alpine:3.20
+    container_name: green-electrum-btcinfo
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - /home/umbrel/umbrel/app-data/bitcoin/data:/run/bitcoin-data:ro
+      - /home/umbrel/green-electrum-site/data:/state
+      - ./scripts/btcinfo-loop.sh:/usr/local/bin/btcinfo-loop.sh:ro
+    command: ["sh", "/usr/local/bin/btcinfo-loop.sh"]
+    restart: unless-stopped

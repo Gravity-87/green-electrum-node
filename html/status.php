@@ -2,9 +2,10 @@
 /* Warnings nicht ins .json leaken lassen */
 ini_set('display_errors', '0');
 
-$host = "192.168.178.56";
+$host = "host.docker.internal";
 $port = 50001;
-$timeout = 3;
+$timeout = 5;
+
 
 date_default_timezone_set('Europe/Berlin');
 
