@@ -83,7 +83,7 @@
 	</div>
 
       <div class="mempool-state" id="mempoolState">Mempool: ...</div>
-      <div class="fee-range" id="feeRange">Range: -</div>
+      <div class="fee-range" id="feeRange">Recommendation Range: -</div>
       <div class="fee-peak" id="feePeak">Peak observed: -</div>
 
       <div class="fee-row" id="fee-slow"></div>
@@ -479,8 +479,45 @@ function fmtFee(v) {
     return Number.isInteger(n) ? String(n) : n.toFixed(1);
 }
 
+
+function derivePressureState(rawPressure, smoothedFees = {}) {
+    const p = String(rawPressure || "").toLowerCase();
+    if (["low", "normal", "high", "very_high"].includes(p)) return p;
+
+    const f = Number(smoothedFees.fast);
+    if (!Number.isFinite(f) || f <= 0) return "unknown";
+    if (f <= 5) return "low";
+    if (f <= 15) return "normal";
+    if (f <= 40) return "high";
+    return "very_high";
+}
+
+function feeHintText(equal, backlogState, pressureState) {
+    if (equal) return "Fee recommendation: all tiers are currently equal.";
+
+    switch (pressureState) {
+        case "low":
+            return "Fee recommendation: Economy or Default is often sufficient. Priority is comparatively faster, but usually not necessary.";
+        case "normal":
+            return "Fee recommendation: Default is a solid baseline. Priority is comparatively faster during short spikes.";
+        case "high":
+            return "Fee recommendation: Priority is comparatively faster under current conditions; lower tiers may confirm with delay.";
+        case "very_high":
+            return "Fee recommendation: Very high fee pressure. Priority is comparatively faster, but next-block confirmation is not guaranteed.";
+        default:
+            if (backlogState === "high") {
+                return "Fee recommendation: Backlog is high. Priority is comparatively faster, but confirmation timing remains market-dependent.";
+            }
+            return "Fee recommendation: Higher fees are comparatively faster, but confirmation timing is never guaranteed.";
+    }
+}
+
+
 function smoothMempoolState(incoming) {
     const st = (incoming || "unknown").toLowerCase();
+
+    // unknown nicht als neuen stabilen Zustand übernehmen
+    if (st === "unknown" && mempoolStateStable) return mempoolStateStable;
 
     if (!mempoolStateStable) {
         mempoolStateStable = st;
@@ -639,6 +676,9 @@ function startBlockFreshTicker() {
 }
 
 
+
+
+
 /* =========================
    STATUS (nur Basisdaten!)
 ========================= */
@@ -771,21 +811,13 @@ async function updateAll() {
         renderFees(smoothedFees);
 
         // Fee hint
-        const feeHintEl = document.getElementById("feeHint") || document.querySelector(".fee-hint");
-        if (feeHintEl) {
-            const equal = !!data.fees_equal;
-            if (equal) {
-                feeHintEl.textContent = "Fee recommendation: all tiers are currently equal.";
-            } else if (st === "low") {
-                feeHintEl.textContent = "Fee recommendation: Economy or Default is often sufficient.";
-            } else if (st === "normal") {
-                feeHintEl.textContent = "Fee recommendation: Default is usually a good baseline.";
-            } else if (st === "high") {
-                feeHintEl.textContent = "Fee recommendation: Priority can help with faster confirmation.";
-            } else {
-                feeHintEl.textContent = "Fee recommendation: higher fee usually confirms faster.";
-            }
-        }
+	const pressureState = derivePressureState(data.fee_pressure_state, smoothedFees);
+	const feeHintEl = document.getElementById("feeHint") || document.querySelector(".fee-hint");
+	if (feeHintEl) {
+	    const equal = !!data.fees_equal;
+	    feeHintEl.textContent = feeHintText(equal, st, pressureState);
+	}
+
 
         // Range aus geglätteten Werten (Konsistenz)
         const feeRangeEl = document.getElementById("feeRange");
@@ -798,9 +830,9 @@ async function updateAll() {
                 const min = Math.min(...vals);
                 const max = Math.max(...vals);
                 if (Math.abs(min - max) < 0.0001) {
-                    feeRangeEl.textContent = `Range: ${fmtFee(min)} sat/vB (tiers currently equal)`;
+                    feeRangeEl.textContent = `Recommendation range: ${fmtFee(min)} sat/vB (tiers currently equal)`;
                 } else {
-                    feeRangeEl.textContent = `Range: ${fmtFee(min)}–${fmtFee(max)} sat/vB`;
+                    feeRangeEl.textContent = `Recommendation range: ${fmtFee(min)}–${fmtFee(max)} sat/vB`;
                 }
             } else {
                 feeRangeEl.textContent = "Range: -";
@@ -822,28 +854,38 @@ async function updateAll() {
             }
         }
 
-        // Mempool badge (mit geglättetem st)
-        const mempoolEl = document.getElementById("mempoolState");
-        if (mempoolEl) {
-            const vb = Number.isFinite(Number(data.mempool_vbytes)) ? Number(data.mempool_vbytes) : null;
+	// Mempool badge (Backlog geglättet + Fee-Pressure separat)
+	const mempoolEl = document.getElementById("mempoolState");
+	if (mempoolEl) {
+	    const vb = Number.isFinite(Number(data.mempool_vbytes)) ? Number(data.mempool_vbytes) : null;
 
-            mempoolEl.classList.remove("mempool-low", "mempool-normal", "mempool-high");
+	    // st bleibt dein geglätteter Backlog-State: low/normal/high
+	    // fee pressure kommt neu aus status.php
+	    const pressure = derivePressureState(data.fee_pressure_state, smoothedFees);
 
-            let label = "Unknown";
-            if (st === "low") {
-                mempoolEl.classList.add("mempool-low");
-                label = "Low congestion";
-            } else if (st === "normal") {
-                mempoolEl.classList.add("mempool-normal");
-                label = "Normal congestion";
-            } else if (st === "high") {
-                mempoolEl.classList.add("mempool-high");
-                label = "High congestion";
-            }
+	    mempoolEl.classList.remove("mempool-low", "mempool-normal", "mempool-high");
 
-            const vbTxt = vb !== null ? ` • ${fmtVbytes(vb)}` : "";
-            mempoolEl.textContent = `Mempool: ${label}${vbTxt}`;
-        }
+	    let backlogLabel = "Backlog unknown";
+	    if (st === "low") {
+	        mempoolEl.classList.add("mempool-low");
+	        backlogLabel = "Low backlog";
+	    } else if (st === "normal") {
+	        mempoolEl.classList.add("mempool-normal");
+	        backlogLabel = "Moderate backlog";
+	    } else if (st === "high") {
+	        mempoolEl.classList.add("mempool-high");
+	        backlogLabel = "High backlog";
+	    }
+
+	    let pressureLabel = "fee pressure unknown";
+	    if (pressure === "low") pressureLabel = "low fee pressure";
+	    else if (pressure === "normal") pressureLabel = "moderate fee pressure";
+	    else if (pressure === "high") pressureLabel = "high fee pressure";
+	    else if (pressure === "very_high") pressureLabel = "very high fee pressure";
+
+	    const vbTxt = vb !== null ? ` • ${fmtVbytes(vb)}` : "";
+	    mempoolEl.textContent = `Mempool: ${backlogLabel}, ${pressureLabel}${vbTxt}`;
+	}
 
     } catch (e) {
         console.error("STATUS FAIL:", e);
@@ -867,8 +909,10 @@ async function updateAll() {
 
         const feeHintEl = document.getElementById("feeHint") || document.querySelector(".fee-hint");
         if (feeHintEl) {
-            feeHintEl.textContent = "Fee recommendation: higher fee usually confirms faster.";
+	    feeHintEl.textContent = "Fee recommendation: Higher fees are comparatively faster, but confirmation timing is not guaranteed.";
+
         }
+
 
         const feeRangeEl = document.getElementById("feeRange");
         if (feeRangeEl) feeRangeEl.textContent = "Range: -";

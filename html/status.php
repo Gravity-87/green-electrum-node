@@ -46,12 +46,12 @@ function fee_convert($val) {
 }
 
 function electrum_request($host, $port, $payload) {
-    $fp = @fsockopen($host, $port, $errno, $errstr, 2);
+    $fp = @fsockopen($host, $port, $errno, $errstr, 5);
     if (!$fp) return null;
 
     fwrite($fp, json_encode($payload) . "
 ");
-    stream_set_timeout($fp, 2);
+    stream_set_timeout($fp, 5);
 
     $response = '';
     while (!feof($fp)) {
@@ -93,6 +93,22 @@ function mempool_state_label($vbytes) {
     if ($vbytes < 1500000) return "normal";
     return "high";
 }
+
+function fee_pressure_label($fast, $p90 = null) {
+    $f = is_numeric($fast) ? floatval($fast) : null;
+    $p = is_numeric($p90) ? floatval($p90) : null;
+
+    // robust: prefer fast, fallback p90
+    $x = $f ?? $p;
+    if ($x === null) return "unknown";
+
+    // more realistic public-facing thresholds
+    if ($x <= 5)   return "low";
+    if ($x <= 15)  return "normal";
+    if ($x <= 40)  return "high";
+    return "very_high";
+}
+
 
 function normalize_histogram($hist) {
     $rows = [];
@@ -506,6 +522,14 @@ if (count($vals) > 0) {
     $feeRangeMax = max($vals);
 }
 
+
+$feePressureState = fee_pressure_label($fees["fast"] ?? null, $feeP90 ?? null);
+
+$backlogState = $mempoolState ?? "unknown";
+$feePressureState = fee_pressure_label($fees["fast"] ?? null, $feeP90 ?? null);
+
+
+
 /* =========================
    OUTPUT
 ========================= */
@@ -531,6 +555,9 @@ $out = [
 
     "mempool_vbytes" => $mempoolVbytes,
     "mempool_state" => $mempoolState,
+
+    "mempool_backlog_state" => $backlogState,
+    "fee_pressure_state"    => $feePressureState,
 
     "block_pace_avg_sec" => $blockPaceAvgSec,
     "block_pace_trend" => $blockPaceTrend,
