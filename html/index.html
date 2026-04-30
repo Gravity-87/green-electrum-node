@@ -56,7 +56,7 @@
       <div class="stat-row"><span>⛓️ Blockheight</span><strong id="blockheight">...</strong></div>
       <div class="stat-row"><span>🧱 Block freshness</span><strong id="blockfresh">...</strong></div>
 	<div class="stat-row" id="blockPace">⏱️ Block pace trend: collecting…</div>
-		<svg id="blockPaceSparkline" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"></svg>
+		<svg id="blockPaceSparkline" viewBox="0 0 120 56" preserveAspectRatio="none" aria-hidden="true"></svg>
 		<div class="sub-hint" id="blockPaceAxisHint" style="margin-top:-20px;text-align: center;">Baseline: 10 minutes per block</div>
 	<div class="sub-hint" id="blockPaceHint">
 	  Trend indicator is warming up (collecting more samples).
@@ -73,24 +73,42 @@
 
     <div class="divider"></div>
 
-    <div class="meta">
+<div class="meta">
 
-	<div class="fee-head">
-	  <div class="fee-title">Fee Advisor</div>
-	  <div class="fee-subtitle">
-	    Economy / Default / Priority recommendations based on current mempool conditions.
-	  </div>
-	</div>
+  <div class="fee-head">
+    <div class="fee-title">Fee Advisor</div>
 
-      <div class="mempool-state" id="mempoolState">Mempool: ...</div>
-      <div class="fee-range" id="feeRange">Recommendation Range: -</div>
-      <div class="fee-peak" id="feePeak">Peak observed: -</div>
+    <!-- Kontext -->
+    <div class="mempool-state" id="mempoolState">Mempool: ...</div>
 
-      <div class="fee-row" id="fee-slow"></div>
-      <div class="fee-row" id="fee-medium"></div>
-      <div class="fee-row" id="fee-fast"></div>
-      <div class="fee-hint" id="feeHint">Recommended tiers are practical targets.</div>
+    <div class="fee-subtitle">
+      Suggested fee rate based on current mempool conditions:
     </div>
+  </div>
+
+  <!-- Hauptempfehlung -->
+  <div class="fee-suggested-wrap">
+    <div class="fee-suggested-value" id="suggestedFeeNow">-</div>
+
+    <div class="fee-suggested-formula" id="suggestedFeeFormula">
+      → Final fee (sat) = fee rate (sat/vB) × transaction size (vB)
+    </div>
+
+    <div class="fee-suggested-subline" id="suggestedFeeSubline">
+      Fee conditions can change quickly.
+    </div>
+  </div>
+
+
+  <!-- Marktreferenz -->
+  <div class="fee-range" id="feeRange">Estimated sufficient fee-rate range (current): -</div>
+  <div class="fee-peak" id="feePeak">Observed outlier peak fee rate: -</div>
+
+  <!-- Kleiner Disclaimer -->
+  <div class="fee-hint" id="feeHint">
+    No fee level guarantees next-block confirmation. Use RBF/CPFP-capable wallets for fallback.
+  </div>
+</div>
 
     <div class="divider"></div>
 
@@ -108,7 +126,7 @@
 	<div class="uptime-legend">
 	  <span><i class="u-lg u-up"></i> online</span>
 	  <span><i class="u-lg u-down"></i> offline</span>
-	  <span><i class="u-lg u-na"></i> no data</span>
+	  <span><i class="u-lg u-na"></i> no data (monitoring gap)</span>
 	  <span><i class="u-lg u-now"></i> now</span>
 	</div>
 
@@ -224,7 +242,6 @@
 
 <!-- JavaScript-Bereich -->
 
-
 <script>
 
 /* ==========================
@@ -234,8 +251,6 @@
 const onion = "yfo2ys4ddwlwkshcdrfr2kndhe7c3hutpcvqyiiwbm2djddjmm2dj4id.onion";
 
 let lastUpdateTimestamp = null;
-let historyLog = [];
-let lastNodeStatus = null;
 
 let lastConnOk = true;
 let lastHighLatencyWarnTs = 0;
@@ -252,6 +267,12 @@ let blockAgeBaseSec = null;      // letzter serverwert (block_age_sec)
 let blockAgeBaseTsMs = null;     // wann der serverwert ankam (Date.now)
 let blockFreshTickerStarted = false;
 
+let lastRenderedBlockHeight = null; // nur für "new block detected" UX-Trigger
+
+let updateInFlight = false;
+let fastRefreshTimer = null;
+
+
 /* =========================
    INIT (einmal beim Laden)
 ========================= */
@@ -259,6 +280,8 @@ let blockFreshTickerStarted = false;
 document.addEventListener("DOMContentLoaded", async () => {
 
     await Promise.all([updateAll(), loadUptime(), loadBTC()]);
+
+    bindPaceTooltip();
 
     setInterval(updateAll, 10000);
     setInterval(loadUptime, 60000);
@@ -329,6 +352,66 @@ function copyText(text, btn) {
    HELPERS
 ========================= */
 
+let paceTooltipEl = null;
+
+function ensurePaceTooltip() {
+    if (paceTooltipEl) return paceTooltipEl;
+    paceTooltipEl = document.createElement("div");
+    paceTooltipEl.id = "paceTooltip";
+    document.body.appendChild(paceTooltipEl);
+    return paceTooltipEl;
+}
+
+function showPaceTooltip(text, clientX, clientY) {
+    const el = ensurePaceTooltip();
+    el.textContent = text;
+
+    const pad = 12;
+    const rect = el.getBoundingClientRect();
+    let x = clientX + pad;
+    let y = clientY + pad;
+
+    if (x + rect.width > window.innerWidth - 8) x = clientX - rect.width - pad;
+    if (y + rect.height > window.innerHeight - 8) y = clientY - rect.height - pad;
+
+    el.style.left = `${Math.max(8, x)}px`;
+    el.style.top  = `${Math.max(8, y)}px`;
+    el.classList.add("show");
+}
+
+function hidePaceTooltip() {
+    if (!paceTooltipEl) return;
+    paceTooltipEl.classList.remove("show");
+}
+
+function bindPaceTooltip() {
+    const svg = document.getElementById("blockPaceSparkline");
+    if (!svg || svg.dataset.tipBound === "1") return;
+    svg.dataset.tipBound = "1";
+
+    svg.addEventListener("mousemove", (e) => {
+        const hit = e.target.closest(".pace-hit");
+        if (!hit) {
+            hidePaceTooltip();
+            return;
+        }
+        const tip = hit.getAttribute("data-tip") || "";
+        showPaceTooltip(tip, e.clientX, e.clientY);
+    });
+
+    svg.addEventListener("mouseleave", hidePaceTooltip);
+    svg.addEventListener("touchstart", (e) => {
+        const hit = e.target.closest(".pace-hit");
+        if (!hit) return;
+        const t = e.touches && e.touches[0];
+        if (!t) return;
+        showPaceTooltip(hit.getAttribute("data-tip") || "", t.clientX, t.clientY);
+    }, { passive: true });
+
+    svg.addEventListener("touchend", hidePaceTooltip, { passive: true });
+}
+
+
 function formatTime(ts) {
   if (!ts) return "never";
   return new Date(ts * 1000).toLocaleString("de-DE", { timeZone: "Europe/Berlin" });
@@ -366,59 +449,6 @@ function fmtAge(seconds) {
     const mm = m % 60;
     return `${h}h ${mm}m ago`;
 }
-
-
-function feeWidthAbs(v) {
-    v = Number(v);
-    if (!Number.isFinite(v) || v <= 0) return 0;
-
-    // absolute, gut lesbare Skala bei niedrigen Fees
-    if (v <= 1) return 22;
-    if (v <= 2) return 32;
-    if (v <= 5) return 48;
-    if (v <= 10) return 65;
-    if (v <= 20) return 82;
-    return 100;
-}
-
-function renderFeeRow(id, label, rawVal) {
-    const el = document.getElementById(id);
-    if (!el) return;
-
-    const v = Number(rawVal);
-    if (!Number.isFinite(v) || v <= 0) {
-        el.innerHTML = `<div class="fee-line"><span class="fee-label">${label}: -</span></div>`;
-        return;
-    }
-
-    const w = feeWidthAbs(v);
-
-    // Farbklasse aus id statt label ableiten
-    let cls = "fee-medium";
-	if (id.includes("slow")) cls = "fee-slow";
-	else if (id.includes("medium")) cls = "fee-medium";
-	else if (id.includes("fast")) cls = "fee-fast";
-
-    el.innerHTML = `
-      <div class="fee-line">
-        <span class="fee-label">${label}: ${fmtFee(v)} sat/vB</span>
-        <span class="fee-bar-wrap">
-          <span class="fee-bar ${cls}" style="width:${w}%"></span>
-        </span>
-      </div>
-    `;
-}
-
-function renderFees(fees = {}) {
-    const slow = fees?.slow ?? "-";
-    const medium = fees?.medium ?? "-";
-    const fast = fees?.fast ?? "-";
-
-    renderFeeRow("fee-slow", "Economy", slow);
-    renderFeeRow("fee-medium", "Default", medium);
-    renderFeeRow("fee-fast", "Priority", fast);
-}
-
 
 function fmtVbytes(vb) {
     if (!Number.isFinite(vb)) return "-";
@@ -492,27 +522,6 @@ function derivePressureState(rawPressure, smoothedFees = {}) {
     return "very_high";
 }
 
-function feeHintText(equal, backlogState, pressureState) {
-    if (equal) return "Fee recommendation: all tiers are currently equal.";
-
-    switch (pressureState) {
-        case "low":
-            return "Fee recommendation: Economy or Default is often sufficient. Priority is comparatively faster, but usually not necessary.";
-        case "normal":
-            return "Fee recommendation: Default is a solid baseline. Priority is comparatively faster during short spikes.";
-        case "high":
-            return "Fee recommendation: Priority is comparatively faster under current conditions; lower tiers may confirm with delay.";
-        case "very_high":
-            return "Fee recommendation: Very high fee pressure. Priority is comparatively faster, but next-block confirmation is not guaranteed.";
-        default:
-            if (backlogState === "high") {
-                return "Fee recommendation: Backlog is high. Priority is comparatively faster, but confirmation timing remains market-dependent.";
-            }
-            return "Fee recommendation: Higher fees are comparatively faster, but confirmation timing is never guaranteed.";
-    }
-}
-
-
 function smoothMempoolState(incoming) {
     const st = (incoming || "unknown").toLowerCase();
 
@@ -548,61 +557,19 @@ function smoothMempoolState(incoming) {
     return mempoolStateStable;
 }
 
-function fmtSecHuman(sec) {
-    if (!Number.isFinite(sec) || sec <= 0) return "-";
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    return `${m}m ${s}s`;
-}
-
 function paceConfidence(samples) {
     const n = Number(samples || 0);
-    if (n < 10) return "< 10 samples --> low confidence";
-    if (n < 30) return "< 30 samples --> medium confidence";
-    return ">= 30 samples --> high confidence";
+    if (n < 10) return "low confidence level";
+    if (n < 30) return "medium confidence level";
+    return "high confidence level";
 }
 
-function renderPaceSparkline(values, trend = "stable", samples = 0) {
-    const svg = document.getElementById("blockPaceSparkline");
-    if (!svg) return;
-
-    const vals = (Array.isArray(values) ? values : [])
-        .map(Number)
-        .filter(v => Number.isFinite(v) && v > 0);
-
-    if (vals.length < 2) {
-        svg.innerHTML = "";
-        return;
-    }
-
-    const w = 120, h = 28, pad = 2;
-    const min = Math.min(...vals);
-    const max = Math.max(...vals);
-    const span = Math.max(1, max - min);
-
-    const pts = vals.map((v, i) => {
-        const x = (i / (vals.length - 1)) * (w - pad * 2) + pad;
-        const y = h - pad - ((v - min) / span) * (h - pad * 2);
-        return [x, y];
-    });
-
-    const d = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p[0].toFixed(2)} ${p[1].toFixed(2)}`).join(" ");
-    const areaD = `${d} L ${pts[pts.length - 1][0].toFixed(2)} ${(h - pad).toFixed(2)} L ${pts[0][0].toFixed(2)} ${(h - pad).toFixed(2)} Z`;
-
-    let lineColor = "#ffeaa7"; // stable
-    let areaColor = "rgba(255,234,167,0.18)";
-    if (trend === "faster") { lineColor = "#55efc4"; areaColor = "rgba(85,239,196,0.18)"; }
-    if (trend === "slower") { lineColor = "#ff7675"; areaColor = "rgba(255,118,117,0.18)"; }
-
-    const warmingUp = Number(samples) < 10;
-    const dash = warmingUp ? `stroke-dasharray="3 3"` : "";
-    const lineOpacity = warmingUp ? `stroke-opacity="0.85"` : `stroke-opacity="1"`;
-
-    svg.innerHTML = `
-      <path class="area" d="${areaD}" fill="${areaColor}"></path>
-      <path class="line" d="${d}" stroke="${lineColor}" ${dash} ${lineOpacity}></path>
-    `;
+function fmtSignedDeltaMin(deltaSec) {
+    const dMin = (Number(deltaSec) || 0) / 60;
+    if (Math.abs(dMin) < 0.05) return "±0.0 min";
+    return `${dMin > 0 ? "+" : ""}${dMin.toFixed(1)} min`;
 }
+
 
 function renderPaceDeviationChart(values, trend = "stable", samples = 0) {
     const svg = document.getElementById("blockPaceSparkline");
@@ -619,13 +586,11 @@ function renderPaceDeviationChart(values, trend = "stable", samples = 0) {
 
     const w = 120, h = 56, padX = 6, padY = 6;
     const yMid = h / 2;
-    const targetSec = 600; // 10m
+    const baselineSec = 600; // 10m
 
-    // deviation in minutes (+ slower, - faster)
-    const dev = vals.map(v => (v - targetSec) / 60);
+    const dev = vals.map(v => (v - baselineSec) / 60); // in minutes
     const maxAbs = Math.max(1, ...dev.map(d => Math.abs(d)));
 
-    // visueller Verstärker
     const visualGain = 1.8;
     const baseScale = (yMid - padY) / maxAbs;
 
@@ -646,15 +611,35 @@ function renderPaceDeviationChart(values, trend = "stable", samples = 0) {
 
     let html = `<line x1="${padX}" y1="${yMid}" x2="${w - padX}" y2="${yMid}" stroke="rgba(255,255,255,0.35)" stroke-width="1"/>`;
 
+    // Bars + hover points with native tooltip
     dev.forEach((d, i) => {
         const x = xAt(i);
         const y = yAt(d);
-	// Balken: stroke-width=
+
         const c = d > 0 ? "rgba(255,118,117,0.55)" : d < 0 ? "rgba(85,239,196,0.55)" : "rgba(255,234,167,0.40)";
         html += `<line x1="${x}" y1="${yMid}" x2="${x}" y2="${y}" stroke="${c}" stroke-width="2"/>`;
+
+        const sec = vals[i];
+        const deltaSec = sec - baselineSec;
+	const barsAgo = (vals.length - 1) - i;
+	const barsTxt = barsAgo === 0 ? "latest" : `${barsAgo} bars ago`;
+	const tip = `Block duration: ${fmtPaceSecHuman(sec)}
+	Delta vs 10m baseline: ${fmtSignedDeltaMin(deltaSec)}
+	Point: ${barsTxt}`;
+	const tipAttr = String(tip)
+	    .replace(/&/g, "&amp;")
+	    .replace(/"/g, "&quot;")
+	    .replace(/</g, "&lt;");
+
+	html += `
+	  <g class="pace-point">
+	    <circle class="pace-hit" cx="${x}" cy="${y}" r="7" fill="transparent" data-tip="${tipAttr}"></circle>
+	    <circle class="pace-dot" cx="${x}" cy="${y}" r="2.4" fill="${lineColor}"></circle>
+	  </g>
+	`;
     });
 
-    // Sparkline: stroke-width=
+    // Sparkline
     const path = dev.map((d, i) => `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(2)} ${yAt(d).toFixed(2)}`).join(" ");
     html += `<path d="${path}" fill="none" stroke="${lineColor}" stroke-width="1.2" ${dash} stroke-linecap="round" stroke-linejoin="round"/>`;
 
@@ -676,16 +661,106 @@ function startBlockFreshTicker() {
 }
 
 
+function pickSuggestedFee(backlogState, pressureState, fees = {}) {
+    const slow = Number(fees.slow);
+    const med  = Number(fees.medium);
+    const fast = Number(fees.fast);
+    const has = (x) => Number.isFinite(x) && x > 0;
 
+    // High pressure -> fast bevorzugen
+    if (pressureState === "high" || pressureState === "very_high") {
+        if (has(fast)) return fast;
+        if (has(med)) return med;
+        if (has(slow)) return slow;
+        return null;
+    }
+
+    // Normal pressure
+    if (pressureState === "normal") {
+        if (backlogState === "high" && has(fast)) return fast;
+        if (has(med)) return med;
+        if (has(fast)) return fast;
+        if (has(slow)) return slow;
+        return null;
+    }
+
+    // Low pressure
+    if (pressureState === "low") {
+        if (backlogState === "high") {
+            // Sicherheits-Puffer bei hohem Backlog
+            if (has(fast)) return Math.max(fast, 2);
+            if (has(med))  return Math.max(med, 2);
+            if (has(slow)) return Math.max(slow, 2);
+            return null;
+        }
+
+        // low/normal backlog + low pressure => eher günstig (1-2 sat/vB)
+        if (has(slow)) return Math.max(slow, 1);
+        if (has(med))  return Math.max(Math.min(med, 2), 1);
+        if (has(fast)) return Math.max(Math.min(fast, 2), 1);
+        return null;
+    }
+
+    // fallback
+    if (has(med)) return med;
+    if (has(fast)) return fast;
+    if (has(slow)) return slow;
+    return null;
+}
+
+function suggestedToneClass(backlogState, pressureState) {
+    if (backlogState === "high" && pressureState === "low") return "fee-pressure-normal";
+    if (pressureState === "low") return "fee-pressure-low";
+    if (pressureState === "normal") return "fee-pressure-normal";
+    if (pressureState === "high") return "fee-pressure-high";
+    if (pressureState === "very_high") return "fee-pressure-very-high";
+    return "fee-pressure-unknown";
+}
+
+function suggestedSublineText(backlogState, pressureState) {
+    if (backlogState === "high" && pressureState === "low") {
+        return "High backlog, but low fee pressure. A small safety buffer is applied.";
+    }
+    if (backlogState === "high" && pressureState === "normal") {
+        return "Backlog is high; consider the upper range for faster confirmation.";
+    }
+    if (backlogState === "low" && pressureState === "low") {
+        return "Low backlog and low fee pressure: cost-saving mode (1–2 sat/vB often sufficient).";
+    }
+    if (pressureState === "low") return "Lower fees are often sufficient right now.";
+    if (pressureState === "normal") return "Balanced fees are usually a good baseline.";
+    if (pressureState === "high") return "Use upper range for comparatively faster confirmation.";
+    if (pressureState === "very_high") return "Very high fee pressure; low-fee transactions may face long delays.";
+    return "Fee conditions can change quickly.";
+}
+
+function fmtPaceSecHuman(sec) {
+    const n = Number(sec);
+    if (!Number.isFinite(n) || n <= 0) return "-";
+    const m = Math.floor(n / 60);
+    const s = Math.round(n % 60);
+    return `${m}m ${s}s`;
+}
+
+function fmtSignedDeltaSec(deltaSec) {
+    const d = Math.round(Number(deltaSec) || 0);
+    if (d === 0) return "±0s";
+    return d > 0 ? `+${d}s` : `${d}s`;
+}
 
 
 /* =========================
    STATUS (nur Basisdaten!)
 ========================= */
 
-async function updateAll() {
+async function updateAll(opts = {}) {
+    if (updateInFlight) return;
+    updateInFlight = true;
+
     try {
-        const res = await fetch("status.php?t=" + Date.now(), { cache: "no-store" });
+        const force = opts.force ? "&force=1" : "";
+        const res = await fetch("status.php?t=" + Date.now() + force, { cache: "no-store" });
+
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
@@ -705,7 +780,6 @@ async function updateAll() {
         // Core status
         const status = data.status || "offline";
         const latency = Number.isFinite(Number(data.latency)) ? Number(data.latency) : "-";
-
         safeSet("status-text", status);
         safeSet("latency", latency);
         safeSet("lastseen", formatTime(data.last_seen));
@@ -722,19 +796,8 @@ async function updateAll() {
             }
         }
 
-        // History nur bei Statuswechsel
-        if (status === "online" && lastNodeStatus !== "online") {
-            addHistory("Node online");
-            lastNodeStatus = "online";
-        } else if (status !== "online" && lastNodeStatus !== "offline") {
-            addHistory("Node offline");
-            lastNodeStatus = "offline";
-        }
-
         // Error-Zustand zurücksetzen
-        if (status === "online") {
-            lastConnOk = true;
-        }
+        if (status === "online") lastConnOk = true;
 
         // High latency warning (max 1x pro Minute)
         const nowTs = Date.now();
@@ -745,60 +808,86 @@ async function updateAll() {
             }
         }
 
-	// Blockheight + Block freshness (server-basiert + live ticker)
+	// Blockheight + Block freshness (server-authoritative)
 	const bh = Number.isFinite(Number(data.blockheight)) ? Number(data.blockheight) : null;
 	safeSet("blockheight", bh ?? "-");
 
-	const ageSec = Number(data.block_age_sec);
-	if (Number.isFinite(ageSec) && ageSec >= 0) {
-	    blockAgeBaseSec = ageSec;
-	    blockAgeBaseTsMs = Date.now();
-	    safeSet("blockfresh", fmtAge(ageSec));
+	const nowMs = Date.now();
+	const ageSecFromApi = Number(data.block_age_sec);
+	const seenAtFromApi = Number(data.block_seen_at);
+
+	// optional UX-trigger bei neuem Block (für schnellen forced refresh)
+	if (Number.isFinite(bh)) {
+	    if (lastRenderedBlockHeight === null) {
+	        lastRenderedBlockHeight = bh;
+	    } else if (bh > lastRenderedBlockHeight) {
+	        lastRenderedBlockHeight = bh;
+
+	        if (fastRefreshTimer) clearTimeout(fastRefreshTimer);
+	        fastRefreshTimer = setTimeout(() => updateAll({ force: true }), 1200);
+	    } else if (bh < lastRenderedBlockHeight) {
+	        // reorg/reset safety
+	        lastRenderedBlockHeight = bh;
+	    }
+	}
+
+	// freshness nur aus API (fallback: seen_at)
+	let freshnessSec = null;
+	if (Number.isFinite(ageSecFromApi) && ageSecFromApi >= 0) {
+	    freshnessSec = Math.floor(ageSecFromApi);
+	} else if (Number.isFinite(seenAtFromApi) && seenAtFromApi > 0) {
+	    freshnessSec = Math.max(0, Math.floor(nowMs / 1000 - seenAtFromApi));
+	}
+
+	if (freshnessSec !== null) {
+	    blockAgeBaseSec = freshnessSec;
+	    blockAgeBaseTsMs = nowMs;
+	    safeSet("blockfresh", fmtAge(freshnessSec));
 	    startBlockFreshTicker();
 	} else {
+	    blockAgeBaseSec = null;
+	    blockAgeBaseTsMs = null;
 	    safeSet("blockfresh", "-");
 	}
 
-	// Block pace (nur aus Backend-Daten)
-	const blockPaceEl = document.getElementById("blockPace");
-	if (blockPaceEl) {
-	    const avg = Number(data.block_pace_avg_sec);
-	    const trend = (data.block_pace_trend || "stable").toLowerCase();
-	    const arrow = data.block_pace_arrow || "→";
-	    const samples = Number(data.block_pace_samples || 0);
-	    const isOffline = (status !== "online");
+        // Block pace
+        const blockPaceEl = document.getElementById("blockPace");
+        if (blockPaceEl) {
+            const avg = Number(data.block_pace_avg_sec);
+            const trend = (data.block_pace_trend || "stable").toLowerCase();
+            const arrow = data.block_pace_arrow || "→";
+            const samples = Number(data.block_pace_samples || 0);
+            const isOffline = (status !== "online");
 
-	    blockPaceEl.classList.remove("pace-up", "pace-down", "pace-stable");
-	    if (trend === "slower") blockPaceEl.classList.add("pace-up");
-	    else if (trend === "faster") blockPaceEl.classList.add("pace-down");
-	    else blockPaceEl.classList.add("pace-stable");
+            blockPaceEl.classList.remove("pace-up", "pace-down", "pace-stable");
+            if (trend === "slower") blockPaceEl.classList.add("pace-up");
+            else if (trend === "faster") blockPaceEl.classList.add("pace-down");
+            else blockPaceEl.classList.add("pace-stable");
 
-	    if (Number.isFinite(avg) && avg > 0 && samples > 0) {
-	        const m = Math.floor(avg / 60);
-	        const s = Math.round(avg % 60);
-	        const suffix = isOffline ? " • last known" : "";
-	        blockPaceEl.textContent = `⏱️ Block pace trend: ${m}m ${s}s ${arrow} (${trend}) • ${samples} samples${suffix}`;
-	    } else {
-	        blockPaceEl.textContent = "⏱️ Block pace trend: collecting data…";
-	    }
+            if (Number.isFinite(avg) && avg > 0 && samples > 0) {
+                const m = Math.floor(avg / 60);
+                const s = Math.round(avg % 60);
+                const suffix = isOffline ? " • last known" : "";
+		blockPaceEl.textContent = `⏱️ Block pace trend: ${m}m ${s}s ${arrow} (${trend})${suffix}`;
+            } else {
+                blockPaceEl.textContent = "⏱️ Block pace trend: collecting data…";
+            }
 
-	    // Sparkline rendern
-		//renderPaceSparkline(data.block_pace_recent_sec || [], trend, samples);
-	    //Deviation rendern
-		renderPaceDeviationChart(data.block_pace_recent_sec || [], trend, samples);
-	}
+            renderPaceDeviationChart(data.block_pace_recent_sec || [], trend, samples);
+        }
 
 	const paceHintEl = document.getElementById("blockPaceHint");
 	if (paceHintEl) {
 	    const n = Number(data.block_pace_samples || 0);
 	    const conf = paceConfidence(n);
+	    const sampleTxt = `${n} sample${n === 1 ? "" : "s"}`;
 
 	    if (status !== "online") {
-	        paceHintEl.textContent = `Node offline — showing last known trend snapshot (${conf}).`;
+	        paceHintEl.textContent = `Node offline — showing last known trend snapshot (${conf}, ${sampleTxt}).`;
 	    } else if (n < 10) {
-	        paceHintEl.textContent = `Trend indicator is warming up (collecting more samples, ${conf}).`;
+	        paceHintEl.textContent = `Trend indicator is warming up (collecting more samples, ${conf}, ${sampleTxt}).`;
 	    } else {
-	        paceHintEl.textContent = `Indicator based on recent found blocks (not a prediction, ${conf}).`;
+	        paceHintEl.textContent = `Indicator based on recent found blocks (not a prediction, ${conf}, ${sampleTxt}).`;
 	    }
 	}
 
@@ -806,20 +895,38 @@ async function updateAll() {
         safeSet("srv-version", data.server_version ?? "-");
         safeSet("srv-protocol", data.protocol ?? "-");
 
-        // Fees
+        // Fees (smoothed raw input)
         const smoothedFees = getSmoothedFees(data.fees || {});
-        renderFees(smoothedFees);
+        const pressureState = derivePressureState(data.fee_pressure_state, smoothedFees);
 
-        // Fee hint
-	const pressureState = derivePressureState(data.fee_pressure_state, smoothedFees);
-	const feeHintEl = document.getElementById("feeHint") || document.querySelector(".fee-hint");
-	if (feeHintEl) {
-	    const equal = !!data.fees_equal;
-	    feeHintEl.textContent = feeHintText(equal, st, pressureState);
+	// Suggested fee now (Hauptwert)
+	const suggested = pickSuggestedFee(st, pressureState, smoothedFees);
+
+	const suggestedEl = document.getElementById("suggestedFeeNow");
+	if (suggestedEl) {
+	    suggestedEl.textContent = Number.isFinite(suggested) ? `${fmtFee(suggested)} sat/vB` : "-";
+	    suggestedEl.classList.remove(
+	        "fee-pressure-low",
+	        "fee-pressure-normal",
+	        "fee-pressure-high",
+	        "fee-pressure-very-high",
+	        "fee-pressure-unknown"
+	    );
+	    suggestedEl.classList.add(suggestedToneClass(st, pressureState));
 	}
 
+	const suggestedSubEl = document.getElementById("suggestedFeeSubline");
+	if (suggestedSubEl) {
+	    suggestedSubEl.textContent = suggestedSublineText(st, pressureState);
+	}
 
-        // Range aus geglätteten Werten (Konsistenz)
+	// Fee hint/disclaimer (kurz)
+	const feeHintEl = document.getElementById("feeHint") || document.querySelector(".fee-hint");
+	if (feeHintEl) {
+	    feeHintEl.textContent = "No fee level guarantees next-block confirmation. Use RBF/CPFP-capable wallets for fallback.";
+	}
+
+        // Estimated sufficient range (current)
         const feeRangeEl = document.getElementById("feeRange");
         if (feeRangeEl) {
             const vals = [smoothedFees.slow, smoothedFees.medium, smoothedFees.fast]
@@ -830,62 +937,54 @@ async function updateAll() {
                 const min = Math.min(...vals);
                 const max = Math.max(...vals);
                 if (Math.abs(min - max) < 0.0001) {
-                    feeRangeEl.textContent = `Recommendation range: ${fmtFee(min)} sat/vB (tiers currently equal)`;
+                    feeRangeEl.textContent = `Estimated sufficient range (current): ${fmtFee(min)} sat/vB`;
                 } else {
-                    feeRangeEl.textContent = `Recommendation range: ${fmtFee(min)}–${fmtFee(max)} sat/vB`;
+                    feeRangeEl.textContent = `Estimated sufficient range (current): ${fmtFee(min)}–${fmtFee(max)} sat/vB`;
                 }
             } else {
-                feeRangeEl.textContent = "Range: -";
+                feeRangeEl.textContent = "Estimated sufficient range (current): -";
             }
         }
 
-        // Peak (raw)
+        // Peak (raw, outlier)
         const feePeakEl = document.getElementById("feePeak");
         if (feePeakEl) {
             const peak = Number(data.fee_peak);
-            const p90 = Number(data.fee_p90);
-
-            if (Number.isFinite(peak) && Number.isFinite(p90)) {
-                feePeakEl.textContent = `Peak observed (raw): ${fmtFee(peak)} sat/vB • High-tier ref: ${fmtFee(p90)} sat/vB`;
-            } else if (Number.isFinite(peak)) {
-                feePeakEl.textContent = `Peak observed (raw): ${fmtFee(peak)} sat/vB`;
+            if (Number.isFinite(peak)) {
+                feePeakEl.textContent = `Observed outlier peak fee rate: ${fmtFee(peak)} sat/vB`;
             } else {
-                feePeakEl.textContent = "Peak observed: -";
+                feePeakEl.textContent = "Observed outlier peak fee rate: -";
             }
         }
 
-	// Mempool badge (Backlog geglättet + Fee-Pressure separat)
-	const mempoolEl = document.getElementById("mempoolState");
-	if (mempoolEl) {
-	    const vb = Number.isFinite(Number(data.mempool_vbytes)) ? Number(data.mempool_vbytes) : null;
+        // Mempool badge
+        const mempoolEl = document.getElementById("mempoolState");
+        if (mempoolEl) {
+            const vb = Number.isFinite(Number(data.mempool_vbytes)) ? Number(data.mempool_vbytes) : null;
 
-	    // st bleibt dein geglätteter Backlog-State: low/normal/high
-	    // fee pressure kommt neu aus status.php
-	    const pressure = derivePressureState(data.fee_pressure_state, smoothedFees);
+            mempoolEl.classList.remove("mempool-low", "mempool-normal", "mempool-high");
 
-	    mempoolEl.classList.remove("mempool-low", "mempool-normal", "mempool-high");
+            let backlogLabel = "Backlog unknown";
+            if (st === "low") {
+                mempoolEl.classList.add("mempool-low");
+                backlogLabel = "Low backlog";
+            } else if (st === "normal") {
+                mempoolEl.classList.add("mempool-normal");
+                backlogLabel = "Moderate backlog";
+            } else if (st === "high") {
+                mempoolEl.classList.add("mempool-high");
+                backlogLabel = "High backlog";
+            }
 
-	    let backlogLabel = "Backlog unknown";
-	    if (st === "low") {
-	        mempoolEl.classList.add("mempool-low");
-	        backlogLabel = "Low backlog";
-	    } else if (st === "normal") {
-	        mempoolEl.classList.add("mempool-normal");
-	        backlogLabel = "Moderate backlog";
-	    } else if (st === "high") {
-	        mempoolEl.classList.add("mempool-high");
-	        backlogLabel = "High backlog";
-	    }
+            let pressureLabel = "fee pressure unknown";
+            if (pressureState === "low") pressureLabel = "low fee pressure";
+            else if (pressureState === "normal") pressureLabel = "moderate fee pressure";
+            else if (pressureState === "high") pressureLabel = "high fee pressure";
+            else if (pressureState === "very_high") pressureLabel = "very high fee pressure";
 
-	    let pressureLabel = "fee pressure unknown";
-	    if (pressure === "low") pressureLabel = "low fee pressure";
-	    else if (pressure === "normal") pressureLabel = "moderate fee pressure";
-	    else if (pressure === "high") pressureLabel = "high fee pressure";
-	    else if (pressure === "very_high") pressureLabel = "very high fee pressure";
-
-	    const vbTxt = vb !== null ? ` • ${fmtVbytes(vb)}` : "";
-	    mempoolEl.textContent = `Mempool: ${backlogLabel}, ${pressureLabel}${vbTxt}`;
-	}
+            const vbTxt = vb !== null ? ` • ${fmtVbytes(vb)}` : "";
+            mempoolEl.textContent = `Mempool: ${backlogLabel}, ${pressureLabel}${vbTxt}`;
+        }
 
     } catch (e) {
         console.error("STATUS FAIL:", e);
@@ -899,26 +998,40 @@ async function updateAll() {
         }
 
         if (lastConnOk) {
-            addHistory("Connection error");
             showToast("Connection failed", "error");
             lastConnOk = false;
         }
 
         safeSet("blockfresh", "-");
-        renderFees({});
+
+	blockAgeBaseSec = null;
+	blockAgeBaseTsMs = null;
+
+        const suggestedEl = document.getElementById("suggestedFeeNow");
+	if (suggestedEl) {
+	    suggestedEl.textContent = "-";
+	    suggestedEl.classList.remove(
+	        "fee-pressure-low",
+	        "fee-pressure-normal",
+	        "fee-pressure-high",
+	        "fee-pressure-very-high"
+	    );
+	    suggestedEl.classList.add("fee-pressure-unknown");
+	}
+
+        const suggestedSubEl = document.getElementById("suggestedFeeSubline");
+        if (suggestedSubEl) suggestedSubEl.textContent = "Fee conditions unavailable.";
 
         const feeHintEl = document.getElementById("feeHint") || document.querySelector(".fee-hint");
         if (feeHintEl) {
-	    feeHintEl.textContent = "Fee recommendation: Higher fees are comparatively faster, but confirmation timing is not guaranteed.";
-
+            feeHintEl.textContent = "Higher fees are comparatively faster, but confirmation timing is not guaranteed.";
         }
 
-
         const feeRangeEl = document.getElementById("feeRange");
-        if (feeRangeEl) feeRangeEl.textContent = "Range: -";
+        if (feeRangeEl) feeRangeEl.textContent = "Estimated sufficient range (current): -";
 
         const feePeakEl = document.getElementById("feePeak");
-        if (feePeakEl) feePeakEl.textContent = "Peak observed: -";
+        if (feePeakEl) feePeakEl.textContent = "Observed outlier peak fee rate: -";
 
         const blockPaceEl = document.getElementById("blockPace");
         if (blockPaceEl) {
@@ -932,13 +1045,16 @@ async function updateAll() {
             paceHintEl.textContent = "Trend indicator based on recent found blocks (not a prediction).";
         }
 
-	renderPaceSparkline([], "stable", 0);
+        renderPaceDeviationChart([], "stable", 0);
 
         const mempoolEl = document.getElementById("mempoolState");
         if (mempoolEl) {
             mempoolEl.classList.remove("mempool-low", "mempool-normal", "mempool-high");
             mempoolEl.textContent = "Mempool: -";
         }
+
+    } finally {
+        updateInFlight = false;
     }
 }
 
@@ -966,45 +1082,70 @@ async function loadUptime() {
         const metaEl = document.getElementById("uptimeMeta");
         if (!kpiEl || !tlEl || !metaEl) return;
 
-        const pct = Number(data.uptime_24h_pct);
-        kpiEl.textContent = Number.isFinite(pct) ? `Uptime 24h: ${pct.toFixed(1)}%` : "Uptime 24h: -";
+       // Neue Datenstruktur: bar_states_24h (24 stündliche Zustände)
+        const states =
+            Array.isArray(data.bar_states_24h_20m) ? data.bar_states_24h_20m :
+            (Array.isArray(data.bar_states_24h) ? data.bar_states_24h : []);
 
-	tlEl.innerHTML = "";
-	const bins = Array.isArray(data.bins) ? data.bins : [];
+	const total = states.length || 0;
+	const online = states.filter(s => s === "online").length;
+	const offline = states.filter(s => s === "offline").length;
+	const unknown = states.filter(s => s !== "online" && s !== "offline").length;
+	const known = online + offline;
 
-	const totalBins = bins.length || 72;
-	const minutesPerBin = 20; // 24h / 72
+	// 1) konservativ (passt visuell zu Balken)
+	const conservativePct = total > 0 ? (online / total) * 100 : NaN;
 
-	bins.forEach((v, idx) => {
-	    const s = document.createElement("span");
-	    s.className = "uptime-cell " + (v === 1 ? "uptime-up" : v === 0 ? "uptime-down" : "uptime-na");
+	// 2) gemessen (nur bekannte Daten)
+	const measuredPct = known > 0 ? (online / known) * 100 : NaN;
 
-	    if (idx === bins.length - 1) {
-	        s.classList.add("is-now");
-	    }
+	// 3) coverage
+	const coveragePct = total > 0 ? (known / total) * 100 : NaN;
 
-	    const newerMin = (totalBins - 1 - idx) * minutesPerBin;
-	    const olderMin = newerMin + minutesPerBin;
+	// KPI-Zeile
+	kpiEl.textContent = Number.isFinite(conservativePct)
+	  ? `Uptime (last 24h): ${conservativePct.toFixed(1)}%`
+	  : "Uptime (last 24h): -";
 
-	    let statusLabel = "No data";
-	    if (v === 1) statusLabel = "Online";
-	    if (v === 0) statusLabel = "Offline";
-
-	    s.title = `${statusLabel} • ~${olderMin}–${newerMin} min ago`;
-	    s.setAttribute("aria-label", s.title);
-
-	    tlEl.appendChild(s);
-	});
-
-        const incidents = Number(data.incidents_24h);
-        const longest = fmtDurSec(data.longest_outage_sec);
-        const coverage = Number(data.coverage_24h_pct);
-
+	// Meta-Zeile
 	metaEl.textContent =
-	  `Incidents (24h): ${Number.isFinite(incidents) ? incidents : "-"} • ` +
-	  `Longest outage: ${longest} • ` +
-	  `Coverage: ${Number.isFinite(coverage) ? coverage.toFixed(1) + "%" : "-"} • ` +
-	  `request-based sampling`;
+	  `Measured uptime: ${Number.isFinite(measuredPct) ? measuredPct.toFixed(1) + "%" : "-"} • ` +
+	  `Coverage: ${Number.isFinite(coveragePct) ? coveragePct.toFixed(1) + "%" : "-"} • ` +
+	  `Online/Offline/No data: ${online}/${offline}/${unknown}`;
+
+        tlEl.innerHTML = "";
+
+        // 72 Balken à 20 min
+	const totalBins = states.length || 72;
+	const minutesPerBin = (totalBins === 72) ? 20 : 60;
+
+        for (let idx = 0; idx < totalBins; idx++) {
+            const st = String(states[idx] || "unknown").toLowerCase();
+
+            const s = document.createElement("span");
+            // vorhandene CSS-Klassen wiederverwenden:
+            // uptime-up (online), uptime-down (offline), uptime-na (unknown)
+            s.className = "uptime-cell " + (
+                st === "online" ? "uptime-up" :
+                st === "offline" ? "uptime-down" :
+                "uptime-na"
+            );
+
+            if (idx === totalBins - 1) s.classList.add("is-now");
+
+            const newerMin = (totalBins - 1 - idx) * minutesPerBin;
+            const olderMin = newerMin + minutesPerBin;
+
+            const statusLabel =
+                st === "online" ? "Online" :
+                st === "offline" ? "Offline" :
+                "No data";
+
+            s.title = `${statusLabel} • ~${olderMin}–${newerMin} min ago`;
+            s.setAttribute("aria-label", s.title);
+
+            tlEl.appendChild(s);
+        }
 
     } catch (e) {
         console.log("Uptime error", e);
@@ -1043,23 +1184,6 @@ function openElectrum() {
             showToast("Electrum not installed?", "warning");
         }
     }, 1500);
-}
-
-/* ===========================
-	History
-============================== */
-
-function addHistory(message) {
-    const now = new Date().toLocaleTimeString();
-    historyLog.unshift(`${now} – ${message}`);
-
-    // max 5 Einträge
-    historyLog = historyLog.slice(0, 5);
-
-    const el = document.getElementById("history");
-    if (!el) return;
-
-    el.innerHTML = historyLog.map(e => `<div>${e}</div>`).join("");
 }
 
 /* ===========================
