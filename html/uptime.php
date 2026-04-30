@@ -1,183 +1,138 @@
 <?php
+header('Content-Type: application/json; charset=utf-8');
 ini_set('display_errors', '0');
-header('Content-Type: application/json');
 
-function pick_state_dir() {
-    $candidates = [
-        "/state",
-        __DIR__ . "/data",
-        sys_get_temp_dir() . "/green-electrum-site"
-    ];
-    foreach ($candidates as $dir) {
-        if (!is_dir($dir)) @mkdir($dir, 0775, true);
-        if (is_dir($dir) && is_writable($dir)) return $dir;
-    }
-    return __DIR__;
-}
-
-function parse_line($line) {
-    $line = trim($line);
-    if ($line === '') return null;
-    $parts = explode('|', $line);
-    if (count($parts) !== 2) return null;
-
-    $ts = (int)$parts[0];
-    $st = (int)$parts[1];
-    if ($ts <= 0) return null;
-    if ($st !== 0 && $st !== 1) return null;
-
-    return [$ts, $st];
-}
-
-$stateDir = pick_state_dir();
-$file = $stateDir . "/uptime.log";
-$lockFile = $stateDir . "/uptime.lock";
-
-// logging config
-$maxEntries = 2000;
-$sampleEverySec = 60;
-
-// target check (dein Node)
-$host = "192.168.178.56";
-$port = 50001;
-$timeout = 2;
-
-$conn = @fsockopen($host, $port, $errno, $errstr, $timeout);
-$currentStatus = $conn ? 1 : 0;
-if ($conn) fclose($conn);
-
+$logFile = '/state/uptime-events.ndjson';
 $now = time();
-$lines = [];
+$windowSec = 24 * 3600;
+$start = $now - $windowSec;
 
-// lock for read-modify-write
-$lockFp = @fopen($lockFile, "c");
-if ($lockFp && @flock($lockFp, LOCK_EX)) {
-    if (file_exists($file)) {
-        $raw = @file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        if (is_array($raw)) $lines = $raw;
+$probeInterval = 15;   // seconds
+$gapThreshold  = 45;   // >45s ohne sample => unknown-Lücke
+
+function load_samples($file, $minTs, $maxTs) {
+    $out = [];
+    if (!is_readable($file)) return $out;
+
+    $fh = @fopen($file, 'r');
+    if (!$fh) return $out;
+
+    while (($line = fgets($fh)) !== false) {
+        $line = trim($line);
+        if ($line === '') continue;
+
+        $j = json_decode($line, true);
+        if (!is_array($j)) continue;
+
+        $ts = isset($j['ts']) && is_numeric($j['ts']) ? intval($j['ts']) : null;
+        $st = isset($j['status']) ? strtolower(trim((string)$j['status'])) : null;
+        if ($ts === null) continue;
+        if ($ts < $minTs || $ts > $maxTs) continue;
+        if ($st !== 'online' && $st !== 'offline') continue;
+
+        $out[] = ['ts' => $ts, 'status' => $st];
     }
 
-    $lastTs = null;
-    $lastSt = null;
-    if (!empty($lines)) {
-        $lastParsed = parse_line($lines[count($lines) - 1]);
-        if ($lastParsed) {
-            $lastTs = $lastParsed[0];
-            $lastSt = $lastParsed[1];
+    fclose($fh);
+
+    usort($out, fn($a, $b) => $a['ts'] <=> $b['ts']);
+    return $out;
+}
+
+$samples = load_samples($logFile, $start - $gapThreshold, $now);
+
+$knownSec = 0.0;
+$onlineSec = 0.0;
+$offlineSec = 0.0;
+$incidents24h = 0;
+
+// transitions online -> offline (nur bei plausibler Lücke)
+for ($i = 1; $i < count($samples); $i++) {
+    $prev = $samples[$i - 1];
+    $cur  = $samples[$i];
+    $gap = $cur['ts'] - $prev['ts'];
+    if ($gap <= ($gapThreshold * 2) && $prev['status'] === 'online' && $cur['status'] === 'offline' && $cur['ts'] >= $start) {
+        $incidents24h++;
+    }
+}
+
+// Zeitanteile berechnen
+if (count($samples) > 0) {
+    for ($i = 0; $i < count($samples); $i++) {
+        $cur = $samples[$i];
+        $nextTs = ($i + 1 < count($samples)) ? $samples[$i + 1]['ts'] : $now;
+
+        $segStart = max($cur['ts'], $start);
+        $segEnd   = min($nextTs, $now);
+        if ($segEnd <= $segStart) continue;
+
+        $dt = $segEnd - $segStart;
+        $knownDt = min($dt, $gapThreshold); // nur bis gapThreshold als sicher gemessen
+        $knownSec += $knownDt;
+
+        if ($cur['status'] === 'online') $onlineSec += $knownDt;
+        else $offlineSec += $knownDt;
+    }
+}
+
+$knownSec = max(0.0, min($windowSec, $knownSec));
+$unknownSec = max(0.0, $windowSec - $knownSec);
+
+$uptimePct = $knownSec > 0 ? round(($onlineSec / $knownSec) * 100, 2) : null;
+$coveragePct = round(($knownSec / $windowSec) * 100, 2);
+
+// 72 Stunden-Buckets (online/offline/unknown)
+// Buckets helper
+function build_buckets($samples, $start, $now, $bucketSec) {
+    $count = intval(floor(($now - $start) / $bucketSec));
+    $out = [];
+
+    for ($i = 0; $i < $count; $i++) {
+        $bStart = $start + ($i * $bucketSec);
+        $bEnd   = $bStart + $bucketSec;
+
+        $on = 0; $off = 0; $tot = 0;
+
+        foreach ($samples as $s) {
+            if ($s['ts'] >= $bStart && $s['ts'] < $bEnd) {
+                $tot++;
+                if ($s['status'] === 'online') $on++;
+                else $off++;
+            }
         }
+
+        if ($tot === 0) $state = 'unknown';
+        else if ($on > 0 && $off === 0) $state = 'online';
+        else if ($off > 0 && $on === 0) $state = 'offline';
+        else $state = ($off > $on) ? 'offline' : 'online'; // mixed => majority
+
+        $out[] = [
+            'idx' => $i,
+            'state' => $state,
+            'samples' => $tot
+        ];
     }
 
-    $shouldAppend = false;
-    if ($lastTs === null) {
-        $shouldAppend = true;
-    } elseif (($now - $lastTs) >= $sampleEverySec) {
-        $shouldAppend = true;
-    } elseif ($lastSt !== null && ((int)$lastSt !== (int)$currentStatus)) {
-        $shouldAppend = true; // status change immediately
-    }
-
-    if ($shouldAppend) {
-        $lines[] = $now . "|" . $currentStatus;
-        if (count($lines) > $maxEntries) {
-            $lines = array_slice($lines, -$maxEntries);
-        }
-        @file_put_contents($file, implode("
-", $lines) . "
-", LOCK_EX);
-    }
-
-    @flock($lockFp, LOCK_UN);
-}
-if ($lockFp) @fclose($lockFp);
-
-// parse all valid points
-$allPoints = [];
-foreach ($lines as $line) {
-    $p = parse_line($line);
-    if ($p) $allPoints[] = ["t" => (int)$p[0], "s" => (int)$p[1]];
-}
-if (empty($allPoints)) {
-    $allPoints[] = ["t" => $now, "s" => $currentStatus];
+    return $out;
 }
 
-// ---- 24h aggregation ----
-$windowSec = 86400;       // 24h
-$binCount = 72;           // 20-min bins
-$binSec = (int)($windowSec / $binCount);
-$cutoff = $now - $windowSec;
+// 24h hourly (compat)
+$buckets24 = build_buckets($samples, $start, $now, 3600);
 
-// points in window
-$points = [];
-foreach ($allPoints as $pt) {
-    if ($pt["t"] >= $cutoff) $points[] = $pt;
-}
-if (empty($points)) {
-    $points[] = ["t" => $now, "s" => $currentStatus];
-}
+// 24h in 20-minute bins (72 bars)
+$buckets72 = build_buckets($samples, $start, $now, 1200);
 
-// bin majority
-$bins = array_fill(0, $binCount, null); // null=no data, 1=up, 0=down
-$upCount = array_fill(0, $binCount, 0);
-$totalCount = array_fill(0, $binCount, 0);
+$out = [
+    'uptime_24h_pct' => $uptimePct,               // bezogen auf bekannte Messzeit
+    'coverage_24h_pct' => $coveragePct,           // wie viel der 24h überhaupt gemessen wurden
+    'offline_minutes_24h' => round($offlineSec / 60, 1),
+    'incidents_24h' => $incidents24h,
+    'bars_24h' => $buckets24,
+    'bar_states_24h' => array_map(fn($b) => $b['state'], $buckets24),
+    'bars_24h_20m' => $buckets72,
+    'bar_states_24h_20m' => array_map(fn($b) => $b['state'], $buckets72),
+    'note' => 'unknown means no monitoring data, not necessarily downtime',
+    'generated_at' => $now
+];
 
-foreach ($points as $pt) {
-    $idx = (int)floor(($pt["t"] - $cutoff) / $binSec);
-    if ($idx < 0) $idx = 0;
-    if ($idx >= $binCount) $idx = $binCount - 1;
-
-    $totalCount[$idx] += 1;
-    if ((int)$pt["s"] === 1) $upCount[$idx] += 1;
-}
-
-for ($i = 0; $i < $binCount; $i++) {
-    if ($totalCount[$i] === 0) {
-        $bins[$i] = null;
-    } else {
-        $bins[$i] = ($upCount[$i] / $totalCount[$i] >= 0.5) ? 1 : 0;
-    }
-}
-
-// uptime % + coverage
-$known = 0;
-$up = 0;
-foreach ($bins as $b) {
-    if ($b === null) continue;
-    $known++;
-    if ($b === 1) $up++;
-}
-$uptimePct = $known > 0 ? round(($up / $known) * 100, 1) : null;
-$coveragePct = round(($known / $binCount) * 100, 1);
-
-// incidents + longest outage (from transitions in 24h points)
-usort($points, function($a, $b) { return $a["t"] <=> $b["t"]; });
-
-$incidents = 0;
-$longestOutageSec = 0;
-$outageStart = null;
-$prev = null;
-
-foreach ($points as $pt) {
-    if ($prev !== null) {
-        if ((int)$prev["s"] === 1 && (int)$pt["s"] === 0) {
-            $incidents++;
-            $outageStart = $pt["t"];
-        } elseif ((int)$prev["s"] === 0 && (int)$pt["s"] === 1 && $outageStart !== null) {
-            $dur = $pt["t"] - $outageStart;
-            if ($dur > $longestOutageSec) $longestOutageSec = $dur;
-            $outageStart = null;
-        }
-    }
-    $prev = $pt;
-}
-if ($outageStart !== null) {
-    $dur = $now - $outageStart;
-    if ($dur > $longestOutageSec) $longestOutageSec = $dur;
-}
-
-echo json_encode([
-    "uptime_24h_pct" => $uptimePct,
-    "coverage_24h_pct" => $coveragePct,
-    "bins" => $bins,
-    "incidents_24h" => $incidents,
-    "longest_outage_sec" => $longestOutageSec
-], JSON_UNESCAPED_SLASHES);
+echo json_encode($out, JSON_UNESCAPED_SLASHES);

@@ -31,8 +31,11 @@ $cacheFile     = $stateDir ? $stateDir . "/status_cache.json" : null;
 $lastSeenFile  = $stateDir ? $stateDir . "/last_seen.txt" : null;
 $paceStateFile = $stateDir ? $stateDir . "/block_pace_state.json" : null;
 $paceLockFile  = $stateDir ? $stateDir . "/block_pace.lock" : null;
+$blockStateFile = $stateDir ? $stateDir . "/block_seen_state.json" : null;
 
 $cacheTtl = 3; // seconds
+
+$forceRefresh = isset($_GET['force']) && $_GET['force'] === '1';
 
 $paceTtlHours   = 72;   // adjustable
 $paceMaxSamples = 288;  // adjustable
@@ -235,10 +238,35 @@ function pace_trend_from_samples($samples) {
     return ["trend" => "stable", "arrow" => "→"];
 }
 
+/* ===== Block seen persistence ===== */
+function load_block_seen_state($file) {
+    $empty = ["last_blockheight" => null, "seen_at" => null];
+    if (!$file || !file_exists($file)) return $empty;
+
+    $raw = @file_get_contents($file);
+    $obj = $raw ? json_decode($raw, true) : null;
+    if (!is_array($obj)) return $empty;
+
+    return [
+        "last_blockheight" => (isset($obj["last_blockheight"]) && is_numeric($obj["last_blockheight"])) ? intval($obj["last_blockheight"]) : null,
+        "seen_at"          => (isset($obj["seen_at"]) && is_numeric($obj["seen_at"])) ? intval($obj["seen_at"]) : null,
+    ];
+}
+
+function save_block_seen_state($file, $state) {
+    if (!$file) return false;
+    $tmp = $file . ".tmp";
+    $json = json_encode($state, JSON_UNESCAPED_SLASHES);
+    if ($json === false) return false;
+    if (@file_put_contents($tmp, $json, LOCK_EX) === false) return false;
+    return @rename($tmp, $file);
+}
+
+
 /* =========================
    Cache fast path
 ========================= */
-if ($cacheFile && file_exists($cacheFile)) {
+if (!$forceRefresh && $cacheFile && file_exists($cacheFile)) {
     $raw = @file_get_contents($cacheFile);
     $cached = $raw ? json_decode($raw, true) : null;
 
@@ -304,6 +332,8 @@ $blockPaceRecentSec = [];
 
 $uptime = "-";
 
+$blockSeenAt = null;
+
 
 // Preload last known block pace for offline display
 $paceSnapshot = load_pace_state($paceStateFile);
@@ -318,6 +348,17 @@ if ($blockPaceSamples > 0) {
     $tr = pace_trend_from_samples($paceSnapshot["samples"]);
     $blockPaceTrend = $tr["trend"];
     $blockPaceArrow = $tr["arrow"];
+}
+
+
+// preload block-seen snapshot (for cross-browser freshness continuity)
+$blockSeenState = load_block_seen_state($blockStateFile);
+
+if (is_numeric($blockSeenState["seen_at"])) {
+    $blockSeenAt = intval($blockSeenState["seen_at"]);
+    if ($blockSeenAt > 0) {
+        $blockAgeSec = max(0, time() - $blockSeenAt);
+    }
 }
 
 
@@ -339,8 +380,45 @@ if ($status === "online") {
 
     if ($resHeader && isset($resHeader["result"]["hex"])) {
         $blockTime = header_time_from_hex($resHeader["result"]["hex"]);
-        if ($blockTime) $blockAgeSec = max(0, time() - $blockTime);
     }
+
+// block seen persistence: authoritative freshness across browsers
+if (is_numeric($blockheight)) {
+    $nowTs = time();
+
+    $lastH = is_numeric($blockSeenState["last_blockheight"]) ? intval($blockSeenState["last_blockheight"]) : null;
+    $seenAt = is_numeric($blockSeenState["seen_at"]) ? intval($blockSeenState["seen_at"]) : null;
+
+    if ($lastH === null) {
+        // first init: avoid artificial 0s; approximate from header time if available
+        if (is_numeric($blockTime)) {
+            $approxAge = max(0, $nowTs - intval($blockTime));
+            $seenAt = $nowTs - $approxAge;
+        } else {
+            $seenAt = $nowTs;
+        }
+    } elseif (intval($blockheight) > $lastH) {
+        // new block arrived
+        $seenAt = $nowTs;
+    } elseif (intval($blockheight) < $lastH) {
+        // reorg/reset safety
+        $seenAt = $nowTs;
+    } else {
+        // same block: keep existing seenAt, sanitize if invalid
+        if (!is_numeric($seenAt) || $seenAt <= 0 || $seenAt > $nowTs) {
+            $seenAt = $nowTs;
+        }
+    }
+
+    $blockSeenState["last_blockheight"] = intval($blockheight);
+    $blockSeenState["seen_at"] = intval($seenAt);
+    save_block_seen_state($blockStateFile, $blockSeenState);
+
+    $blockSeenAt = intval($seenAt);
+    $blockAgeSec = max(0, $nowTs - $blockSeenAt);
+}
+
+
 
 // block pace (server persistent, locked update)
 if ($paceStateFile && $paceLockFile) {
@@ -523,8 +601,6 @@ if (count($vals) > 0) {
 }
 
 
-$feePressureState = fee_pressure_label($fees["fast"] ?? null, $feeP90 ?? null);
-
 $backlogState = $mempoolState ?? "unknown";
 $feePressureState = fee_pressure_label($fees["fast"] ?? null, $feeP90 ?? null);
 
@@ -540,6 +616,7 @@ $out = [
 
     "blockheight" => $blockheight,
     "block_time" => $blockTime,
+    "block_seen_at" => $blockSeenAt,
     "block_age_sec" => $blockAgeSec,
 
     "server_version" => $server_version,

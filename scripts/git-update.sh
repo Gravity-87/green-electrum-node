@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
-# Examples starting the script....
-#
+# Examples:
 # ./scripts/git-update.sh --help
 # ./scripts/git-update.sh --all --dry-run
 # ./scripts/git-update.sh --files "html/index.html html/status.php" --dry-run
-
+# ./scripts/git-update.sh --web -m "UI polish"
+# ./scripts/git-update.sh --backend -m "Backend sync fixes"
 
 set -euo pipefail
 
@@ -16,9 +16,8 @@ if [[ -z "${REPO_DIR:-}" ]]; then
   exit 1
 fi
 
-# Dann immer aus Repo-root arbeiten:
+# Always work from repo root
 cd "$REPO_DIR"
-
 
 STAGE_MODE=""
 COMMIT_MSG=""
@@ -28,30 +27,45 @@ FILES=()
 usage() {
   cat << 'USAGE'
 Usage:
-  ./git-update.sh [options]
+  ./scripts/git-update.sh [options]
 
 Options:
-  -a, --all                 Stage all changes
+  -a, --all                 Stage all changed/untracked files
   -f, --files "A B C"       Stage only specific files (space-separated)
+      --web                 Shortcut for --files "html/index.html html/style.css"
+      --backend             Shortcut for --files "html/status.php html/uptime.php scripts/uptime-probe.sh docker-compose.yml"
   -m, --message "text"      Commit message (otherwise prompt)
-  -d, --dir PATH            Repo directory (default: script directory)
+  -d, --dir PATH            Repo directory (optional override)
       --dry-run             Show what would happen, do not commit/push
   -h, --help, /?            Show this help
 
 Examples:
-  ./git-update.sh --all -m "Update status logic"
-  ./git-update.sh --files "html/index.html html/style.css" -m "UI polish"
-  ./git-update.sh --all --dry-run
+  ./scripts/git-update.sh --all -m "Update status logic"
+  ./scripts/git-update.sh --files "html/index.html html/style.css" -m "UI polish"
+  ./scripts/git-update.sh --web -m "Frontend tweak"
+  ./scripts/git-update.sh --all --dry-run
 USAGE
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -a|--all) STAGE_MODE="all"; shift ;;
+    -a|--all)
+      STAGE_MODE="all"; shift
+      ;;
     -f|--files)
       STAGE_MODE="files"; shift
       [[ $# -gt 0 ]] || { echo "ERROR: --files needs a value"; exit 1; }
       read -r -a FILES <<< "$1"; shift
+      ;;
+    --web)
+      STAGE_MODE="files"
+      FILES=("html/index.html" "html/style.css")
+      shift
+      ;;
+    --backend)
+      STAGE_MODE="files"
+      FILES=("html/status.php" "html/uptime.php" "scripts/uptime-probe.sh" "docker-compose.yml")
+      shift
       ;;
     -m|--message)
       shift
@@ -63,9 +77,17 @@ while [[ $# -gt 0 ]]; do
       [[ $# -gt 0 ]] || { echo "ERROR: --dir needs a path"; exit 1; }
       REPO_DIR="$1"; shift
       ;;
-    --dry-run) DRY_RUN=1; shift ;;
-    -h|--help|"/?") usage; exit 0 ;;
-    *) echo "Unknown option: $1"; usage; exit 1 ;;
+    --dry-run)
+      DRY_RUN=1; shift
+      ;;
+    -h|--help|"/?")
+      usage; exit 0
+      ;;
+    *)
+      echo "Unknown option: $1"
+      usage
+      exit 1
+      ;;
   esac
 done
 
@@ -75,7 +97,10 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
   exit 1
 }
 
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
 echo "== Repo: $REPO_DIR =="
+echo "== Branch: $CURRENT_BRANCH =="
 echo "== Current changes =="
 git status --short
 
@@ -84,6 +109,7 @@ if [[ -z "$(git status --porcelain)" ]]; then
   exit 0
 fi
 
+# If no stage mode selected, ask user
 if [[ -z "$STAGE_MODE" ]]; then
   read -rp "Stage [a]ll or [s]elected files? (a/s): " choice
   case "${choice,,}" in
@@ -93,13 +119,37 @@ if [[ -z "$STAGE_MODE" ]]; then
   esac
 fi
 
+# Build candidate list
 CANDIDATES=()
+
 if [[ "$STAGE_MODE" == "all" ]]; then
-  # take changed tracked/untracked files from porcelain
-  while IFS= read -r line; do
-    f="${line:3}"
-    [[ -n "$f" ]] && CANDIDATES+=("$f")
-  done < <(git status --porcelain)
+  # changed tracked + untracked (unique)
+  declare -A seen=()
+
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    seen["$f"]=1
+  done < <(git diff --name-only)
+
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    seen["$f"]=1
+  done < <(git ls-files --others --exclude-standard)
+
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    seen["$f"]=1
+  done < <(git ls-files --deleted)
+
+  for f in "${!seen[@]}"; do
+    CANDIDATES+=("$f")
+  done
+
+  # Stable order
+  IFS=$'
+' CANDIDATES=($(printf '%s
+' "${CANDIDATES[@]}" | sort))
+  unset IFS
 else
   if [[ ${#FILES[@]} -eq 0 ]]; then
     echo "Changed files:"
@@ -116,7 +166,7 @@ echo "== Candidate files =="
 printf '%s
 ' "${CANDIDATES[@]}"
 
-# safety check
+# Safety check
 FORBIDDEN_HIT=0
 echo
 echo "== Safety check =="
@@ -144,26 +194,35 @@ echo "OK: no blocked files detected."
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo
   echo "== DRY RUN =="
-  echo "Would run:"
   if [[ "$STAGE_MODE" == "all" ]]; then
-    echo "  git add ."
+    echo "Would run: git add -A"
   else
-    echo "  git add ${CANDIDATES[*]}"
+    echo "Would run: git add ${CANDIDATES[*]}"
   fi
-  [[ -n "$COMMIT_MSG" ]] && echo "  git commit -m \"$COMMIT_MSG\"" || echo "  git commit -m \"<your message>\""
-  echo "  git pull --rebase origin main"
-  echo "  git push"
+  [[ -n "$COMMIT_MSG" ]] && echo "Would run: git commit -m \"$COMMIT_MSG\"" || echo "Would run: git commit -m \"<your message>\""
+  echo "Would run: git pull --rebase origin $CURRENT_BRANCH"
+  echo "Would run: git push origin $CURRENT_BRANCH"
   echo
   echo "No changes were committed/pushed."
   exit 0
 fi
 
-# real run
+# Real run
 git reset -q
+
 if [[ "$STAGE_MODE" == "all" ]]; then
-  git add .
+  git add -A
 else
-  git add "${CANDIDATES[@]}"
+  git add -- "${CANDIDATES[@]}"
+fi
+
+# If nothing staged, exit cleanly (important)
+if git diff --cached --quiet; then
+  echo
+  echo "Nothing staged for commit (selected files may be unchanged)."
+  echo "Remaining working tree status:"
+  git status --short
+  exit 0
 fi
 
 if [[ -z "$COMMIT_MSG" ]]; then
@@ -173,13 +232,17 @@ fi
 
 git commit -m "$COMMIT_MSG"
 
-if ! git pull --rebase origin main; then
+if ! git pull --rebase origin "$CURRENT_BRANCH"; then
   echo "Rebase conflict. Resolve and continue manually:"
   echo "  git add <files>"
   echo "  git rebase --continue"
-  echo "  git push"
+  echo "  git push origin $CURRENT_BRANCH"
   exit 1
 fi
 
-git push
+git push origin "$CURRENT_BRANCH"
+
+echo
 echo "✅ Done."
+echo "== Remaining local changes (if any) =="
+git status --short || true
