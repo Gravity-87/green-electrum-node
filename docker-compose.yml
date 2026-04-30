@@ -55,3 +55,14 @@ services:
       - ./scripts/btcinfo-loop.sh:/usr/local/bin/btcinfo-loop.sh:ro
     command: ["sh", "/usr/local/bin/btcinfo-loop.sh"]
     restart: unless-stopped
+
+  uptimeprobe:
+    image: alpine:3.20
+    container_name: green-electrum-uptimeprobe
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - /home/umbrel/green-electrum-site/data:/state
+      - ./scripts/uptime-probe.sh:/usr/local/bin/uptime-probe.sh:ro
+    command: ["sh", "/usr/local/bin/uptime-probe.sh"]
+    restart: unless-stopped
