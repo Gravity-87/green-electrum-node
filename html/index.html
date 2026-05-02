@@ -310,6 +310,10 @@ let fastRefreshTimer = null;
 
 let feePresetTouched = false;
 
+let btcFailCount = 0;
+let btcWasOk = true;
+let suppressToastsUntil = 0;
+
 
 /* =========================
    INIT (einmal beim Laden)
@@ -346,8 +350,15 @@ if (txPreset && txInput) {
 
     // Initial einmal rechnen
     updateFeeCalculator();
+
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+        // kurze Ruhephase nach App/Tab-Resume
+        suppressToastsUntil = Date.now() + 10000; // 10s
+    }
 });
 
+});
 
 /* ============================
     TOAST System
@@ -1569,8 +1580,10 @@ function openElectrum() {
         Bitcoin-Node
 ============================== */
 
-
 async function loadBTC() {
+    // optional: im Hintergrund gar nicht pollen
+    if (document.visibilityState !== "visible") return;
+
     try {
         const res = await fetch("btcinfo.php?t=" + Date.now(), { cache: "no-store" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1598,9 +1611,21 @@ async function loadBTC() {
             s.style.color = isSynced ? "#4ed440" : "#f1c40f";
         }
 
+        // Erfolgszustand zurücksetzen
+        btcFailCount = 0;
+        btcWasOk = true;
+
     } catch (e) {
         console.log("BTC load failed", e);
-        showToast("BTC backend unavailable", "warning");
+
+        btcFailCount++;
+        const inGrace = Date.now() < suppressToastsUntil;
+
+        // Toast nur nach 2 Fehlern in Folge + nur beim Statuswechsel ok->fail
+        if (!inGrace && btcFailCount >= 2 && btcWasOk) {
+            showToast("BTC backend unavailable", "warning");
+            btcWasOk = false;
+        }
 
         const v = document.getElementById("btc-version");
         const s = document.getElementById("btc-sync");
