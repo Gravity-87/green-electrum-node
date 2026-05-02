@@ -32,6 +32,13 @@ $lastSeenFile  = $stateDir ? $stateDir . "/last_seen.txt" : null;
 $paceStateFile = $stateDir ? $stateDir . "/block_pace_state.json" : null;
 $paceLockFile  = $stateDir ? $stateDir . "/block_pace.lock" : null;
 $blockStateFile = $stateDir ? $stateDir . "/block_seen_state.json" : null;
+$tendencyFile        = $stateDir ? $stateDir . "/fee_tendency.csv" : null;
+$tendencyLockFile    = $stateDir ? $stateDir . "/fee_tendency.lock" : null;
+$tendencyLastLogFile = $stateDir ? $stateDir . "/fee_tendency_lastlog.txt" : null;
+
+$tendencyWindowDays      = 14;    // rolling window
+$tendencyLogIntervalSec  = 300;   // 5 min
+$tendencyMaxRows         = 60000; // hard cap
 
 $cacheTtl = 3; // seconds
 
@@ -170,6 +177,188 @@ function fee_from_histogram($hist, $targetVbytes) {
 
     return $lastFee !== null ? round($lastFee, 1) : null;
 }
+
+function has_num($x) { return is_numeric($x) && floatval($x) > 0; }
+
+function suggested_fee_server($backlogState, $pressureState, $fees) {
+    $slow = has_num($fees["slow"] ?? null) ? floatval($fees["slow"]) : null;
+    $med  = has_num($fees["medium"] ?? null) ? floatval($fees["medium"]) : null;
+    $fast = has_num($fees["fast"] ?? null) ? floatval($fees["fast"]) : null;
+
+    $pick = function($arr) {
+        foreach ($arr as $v) if ($v !== null) return $v;
+        return null;
+    };
+
+    if ($pressureState === "high" || $pressureState === "very_high") {
+        return $pick([$fast, $med, $slow]);
+    }
+
+    if ($pressureState === "normal") {
+        if ($backlogState === "high") return $pick([$fast, $med, $slow]);
+        return $pick([$med, $fast, $slow]);
+    }
+
+    if ($pressureState === "low") {
+        if ($backlogState === "high") {
+            $v = $pick([$fast, $med, $slow]);
+            return $v !== null ? max($v, 2.0) : null;
+        }
+        if ($slow !== null) return max($slow, 1.0);
+        if ($med  !== null) return max(min($med, 2.0), 1.0);
+        if ($fast !== null) return max(min($fast, 2.0), 1.0);
+        return null;
+    }
+
+    return $pick([$med, $fast, $slow]);
+}
+
+function qtile($arr, $q) {
+    $n = count($arr);
+    if ($n === 0) return null;
+    sort($arr, SORT_NUMERIC);
+    $pos = ($n - 1) * $q;
+    $lo = (int)floor($pos);
+    $hi = (int)ceil($pos);
+    if ($lo === $hi) return $arr[$lo];
+    $w = $pos - $lo;
+    return $arr[$lo] * (1 - $w) + $arr[$hi] * $w;
+}
+
+function mode_label($arr) {
+    if (count($arr) === 0) return null;
+    $cnt = [];
+    foreach ($arr as $v) {
+        $k = (string)$v;
+        if (!isset($cnt[$k])) $cnt[$k] = 0;
+        $cnt[$k]++;
+    }
+    arsort($cnt);
+    return array_key_first($cnt);
+}
+
+function maybe_log_tendency_sample($file, $lockFile, $lastLogFile, $intervalSec, $maxRows, $sample) {
+    if (!$file || !$lockFile || !$lastLogFile) return;
+
+    $now = time();
+    $last = file_exists($lastLogFile) ? intval(@file_get_contents($lastLogFile)) : 0;
+    if (($now - $last) < $intervalSec) return;
+
+    $lockFp = @fopen($lockFile, "c");
+    if (!$lockFp) return;
+
+    if (@flock($lockFp, LOCK_EX)) {
+        $last2 = file_exists($lastLogFile) ? intval(@file_get_contents($lastLogFile)) : 0;
+        if (($now - $last2) >= $intervalSec) {
+            $line = implode(",", [
+                intval($sample["ts"]),
+                $sample["backlog"],
+                $sample["pressure"],
+                round(floatval($sample["suggested"]), 2)
+            ]) . "
+";
+
+            @file_put_contents($file, $line, FILE_APPEND | LOCK_EX);
+            @file_put_contents($lastLogFile, (string)$now, LOCK_EX);
+
+            // pruning
+            $lines = @file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            if (is_array($lines) && count($lines) > $maxRows) {
+                $lines = array_slice($lines, -$maxRows);
+                @file_put_contents($file, implode("
+", $lines) . "
+", LOCK_EX);
+            }
+        }
+
+        @flock($lockFp, LOCK_UN);
+    }
+
+    @fclose($lockFp);
+}
+
+function tendency_for_current_slot($file, $windowDays) {
+    $out = [
+        "samples" => 0,
+        "p25" => null,
+        "p50" => null,
+        "p75" => null,
+        "mode_backlog" => null,
+        "mode_pressure" => null,
+        "confidence" => "low"
+    ];
+
+    if (!$file || !file_exists($file)) return $out;
+
+    $lines = @file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if (!is_array($lines) || count($lines) === 0) return $out;
+
+    $now = time();
+    $cut = $now - ($windowDays * 86400);
+    $dow = intval(date("w", $now));   // 0..6
+    $hour = intval(date("G", $now));  // 0..23
+
+    $fees = [];
+    $backs = [];
+    $press = [];
+
+    foreach ($lines as $ln) {
+        $p = explode(",", $ln);
+        if (count($p) < 4) continue;
+
+        $ts = intval($p[0]);
+        if ($ts < $cut || $ts > $now + 3600) continue;
+
+        $d = intval(date("w", $ts));
+        $h = intval(date("G", $ts));
+        if ($d !== $dow || $h !== $hour) continue;
+
+        $b = trim($p[1]);
+        $pr = trim($p[2]);
+        $sg = floatval($p[3]);
+
+        if ($sg <= 0) continue;
+
+        $fees[] = $sg;
+        $backs[] = $b;
+        $press[] = $pr;
+    }
+
+    $n = count($fees);
+    $out["samples"] = $n;
+    if ($n === 0) return $out;
+
+    $out["p25"] = round(qtile($fees, 0.25), 1);
+    $out["p50"] = round(qtile($fees, 0.50), 1);
+    $out["p75"] = round(qtile($fees, 0.75), 1);
+    $out["mode_backlog"] = mode_label($backs);
+    $out["mode_pressure"] = mode_label($press);
+
+    if ($n < 8) $out["confidence"] = "low";
+    else if ($n < 20) $out["confidence"] = "medium";
+    else $out["confidence"] = "high";
+
+    return $out;
+}
+
+function tendency_days_observed($file) {
+    if (!$file || !file_exists($file)) return 0;
+    $lines = @file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if (!is_array($lines) || count($lines) === 0) return 0;
+
+    $firstTs = null;
+    foreach ($lines as $ln) {
+        $p = explode(",", $ln);
+        if (count($p) < 1) continue;
+        $ts = intval($p[0]);
+        if ($ts > 0) { $firstTs = $ts; break; }
+    }
+    if (!$firstTs) return 0;
+
+    $days = (int)floor((time() - $firstTs) / 86400) + 1;
+    return max(1, $days);
+}
+
 
 /* ===== Block pace persistence ===== */
 function load_pace_state($file) {
@@ -605,6 +794,37 @@ $backlogState = $mempoolState ?? "unknown";
 $feePressureState = fee_pressure_label($fees["fast"] ?? null, $feeP90 ?? null);
 
 
+// server-side suggested fee (for logging/tendency)
+$suggestedServer = suggested_fee_server($backlogState, $feePressureState, $fees);
+
+// log compact tendency sample (online only, valid states only)
+if (
+    $status === "online" &&
+    in_array($backlogState, ["low","normal","high"], true) &&
+    in_array($feePressureState, ["low","normal","high","very_high"], true) &&
+    is_numeric($suggestedServer) && floatval($suggestedServer) > 0
+) {
+    maybe_log_tendency_sample(
+        $tendencyFile,
+        $tendencyLockFile,
+        $tendencyLastLogFile,
+        $tendencyLogIntervalSec,
+        $tendencyMaxRows,
+        [
+            "ts" => time(),
+            "backlog" => $backlogState,
+            "pressure" => $feePressureState,
+            "suggested" => floatval($suggestedServer)
+        ]
+    );
+}
+
+$tendency = tendency_for_current_slot($tendencyFile, $tendencyWindowDays);
+
+$daysObserved = tendency_days_observed($tendencyFile);
+$bootstrap = ($daysObserved < $tendencyWindowDays);
+
+
 
 /* =========================
    OUTPUT
@@ -642,6 +862,20 @@ $out = [
     "block_pace_samples" => $blockPaceSamples,
 
     "block_pace_recent_sec" => $blockPaceRecentSec,
+
+    "tendency_window_days" => $tendencyWindowDays,
+    "tendency_slot_dow" => intval(date("w")),
+    "tendency_slot_hour" => intval(date("G")),
+    "tendency_samples" => $tendency["samples"],
+    "tendency_suggested_p25" => $tendency["p25"],
+    "tendency_suggested_p50" => $tendency["p50"],
+    "tendency_suggested_p75" => $tendency["p75"],
+    "tendency_mode_backlog" => $tendency["mode_backlog"],
+    "tendency_mode_pressure" => $tendency["mode_pressure"],
+    "tendency_confidence" => $tendency["confidence"],
+
+    "tendency_days_observed" => $daysObserved,
+    "tendency_bootstrap" => $bootstrap,
 
     "uptime" => $uptime,
     "generated_at" => time()

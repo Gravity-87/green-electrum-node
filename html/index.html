@@ -77,37 +77,73 @@
 
   <div class="fee-head">
     <div class="fee-title">Fee Advisor</div>
+  </div>
 
-    <!-- Kontext -->
+  <!-- SECTION 1: NOW -->
+  <div class="fee-section fee-section-now">
     <div class="mempool-state" id="mempoolState">Mempool: ...</div>
+    <div class="mempool-explain" id="mempoolExplain">Assessing current market conditions...</div>
 
-    <div class="fee-subtitle">
+    <!--<div class="fee-subtitle">
       Suggested fee rate based on current mempool conditions:
+    </div> -->
+
+    <div class="fee-suggested-wrap">
+      <div class="fee-suggested-value" id="suggestedFeeNow">-</div>
+
+      <div class="fee-suggested-formula" id="suggestedFeeFormula">
+        Set this fee rate in your wallet to influence confirmation speed.
+      </div>
+	<div class="fee-range" id="feeRange">Current practical range: -</div>
+	<div class="fee-range-hint" id="feeRangeHint"></div>
+
     </div>
   </div>
 
-  <!-- Hauptempfehlung -->
-  <div class="fee-suggested-wrap">
-    <div class="fee-suggested-value" id="suggestedFeeNow">-</div>
+<!-- SECTION 2: ESTIMATE -->
+<div class="fee-section fee-section-estimate">
+  <details class="fee-calc-details" id="feeCalcDetails">
+    <summary>Fee calculator (optional)</summary>
 
-    <div class="fee-suggested-formula" id="suggestedFeeFormula">
-      → Final fee (sat) = fee rate (sat/vB) × transaction size (vB)
+    <div class="fee-calc" id="feeCalc">
+      <div class="fee-calc-grid">
+        <div class="fee-field">
+          <label for="txPreset">Example transaction type</label>
+          <select id="txPreset">
+            <option value="141">Small tx (~141 vB)</option>
+            <option value="220" selected>Standard tx (~220 vB)</option>
+            <option value="320">Large tx (~320 vB)</option>
+          </select>
+          <div class="fee-field-hint" id="txPresetHint">
+            Auto-selected from current mempool level.
+          </div>
+        </div>
+
+        <div class="fee-field">
+          <label for="txSizeVb">Transaction size (vB)</label>
+          <input id="txSizeVb" type="number" min="1" step="1" value="220" />
+          <div class="fee-field-hint">You can fine-tune this manually.</div>
+        </div>
+      </div>
+
+      <div class="fee-calc-result" id="feeCalcResult">Estimated network fee: -</div>
+      <div class="fee-calc-hint">Estimate only. Your wallet may vary slightly.</div>
     </div>
+  </details>
+</div>
 
-    <div class="fee-suggested-subline" id="suggestedFeeSubline">
-      Fee conditions can change quickly.
-    </div>
-  </div>
+  <!-- SECTION 3: CONTEXT -->
+	<div class="fee-section fee-section-context">
+	  <div class="fee-tendency" id="feeTendency">Fee tendency: -</div>
+	  <div class="fee-tendency-sub" id="feeTendencySub"></div>
+	  <div class="fee-peak" id="feePeak">Observed outlier peak fee rate: -</div>
 
+	  <div class="mini-separator fee-disclaimer-sep"><hr></div>
+	  <div class="fee-hint" id="feeHint">
+	    No fee level guarantees next-block confirmation. Use RBF/CPFP-capable wallets for fallback.
+	  </div>
+	</div>
 
-  <!-- Marktreferenz -->
-  <div class="fee-range" id="feeRange">Estimated sufficient fee-rate range (current): -</div>
-  <div class="fee-peak" id="feePeak">Observed outlier peak fee rate: -</div>
-
-  <!-- Kleiner Disclaimer -->
-  <div class="fee-hint" id="feeHint">
-    No fee level guarantees next-block confirmation. Use RBF/CPFP-capable wallets for fallback.
-  </div>
 </div>
 
     <div class="divider"></div>
@@ -272,13 +308,14 @@ let lastRenderedBlockHeight = null; // nur für "new block detected" UX-Trigger
 let updateInFlight = false;
 let fastRefreshTimer = null;
 
+let feePresetTouched = false;
+
 
 /* =========================
    INIT (einmal beim Laden)
 ========================= */
 
 document.addEventListener("DOMContentLoaded", async () => {
-
     await Promise.all([updateAll(), loadUptime(), loadBTC()]);
 
     bindPaceTooltip();
@@ -287,6 +324,28 @@ document.addEventListener("DOMContentLoaded", async () => {
     setInterval(loadUptime, 60000);
     setInterval(loadBTC, 30000);
     setInterval(updateLastUpdated, 1000);
+
+    const txInput = document.getElementById("txSizeVb");
+    const txPreset = document.getElementById("txPreset");
+
+if (txInput) {
+    txInput.addEventListener("input", () => {
+        feePresetTouched = true;
+        syncPresetToNearest();
+        updateFeeCalculator();
+    });
+}
+
+if (txPreset && txInput) {
+    txPreset.addEventListener("change", () => {
+        feePresetTouched = true;
+        txInput.value = txPreset.value;
+        updateFeeCalculator();
+    });
+}
+
+    // Initial einmal rechnen
+    updateFeeCalculator();
 });
 
 
@@ -717,23 +776,6 @@ function suggestedToneClass(backlogState, pressureState) {
     return "fee-pressure-unknown";
 }
 
-function suggestedSublineText(backlogState, pressureState) {
-    if (backlogState === "high" && pressureState === "low") {
-        return "High backlog, but low fee pressure. A small safety buffer is applied.";
-    }
-    if (backlogState === "high" && pressureState === "normal") {
-        return "Backlog is high; consider the upper range for faster confirmation.";
-    }
-    if (backlogState === "low" && pressureState === "low") {
-        return "Low backlog and low fee pressure: cost-saving mode (1–2 sat/vB often sufficient).";
-    }
-    if (pressureState === "low") return "Lower fees are often sufficient right now.";
-    if (pressureState === "normal") return "Balanced fees are usually a good baseline.";
-    if (pressureState === "high") return "Use upper range for comparatively faster confirmation.";
-    if (pressureState === "very_high") return "Very high fee pressure; low-fee transactions may face long delays.";
-    return "Fee conditions can change quickly.";
-}
-
 function fmtPaceSecHuman(sec) {
     const n = Number(sec);
     if (!Number.isFinite(n) || n <= 0) return "-";
@@ -746,6 +788,219 @@ function fmtSignedDeltaSec(deltaSec) {
     const d = Math.round(Number(deltaSec) || 0);
     if (d === 0) return "±0s";
     return d > 0 ? `+${d}s` : `${d}s`;
+}
+
+function mempoolLevel(backlogState, pressureState) {
+    // Priorität: pressure dominiert, backlog verfeinert
+    if (pressureState === "very_high") return "Stressed";
+
+    if (pressureState === "high") {
+        return backlogState === "high" ? "Stressed" : "Congested";
+    }
+
+    if (pressureState === "normal") {
+        if (backlogState === "high") return "Congested";
+        return "Busy";
+    }
+
+    if (pressureState === "low") {
+        if (backlogState === "high") return "Busy";
+        if (backlogState === "normal") return "Elevated";
+        if (backlogState === "low") return "Calm";
+    }
+
+    return "Unknown";
+}
+
+function mempoolLevelClass(level) {
+    if (level === "Calm") return "mempool-low";
+    if (level === "Elevated") return "mempool-normal";
+    if (level === "Busy") return "mempool-normal";
+    if (level === "Congested") return "mempool-high";
+    if (level === "Stressed") return "mempool-high";
+    return "";
+}
+
+function backlogLabel(backlogState) {
+    if (backlogState === "low") return "Low backlog";
+    if (backlogState === "normal") return "Moderate backlog";
+    if (backlogState === "high") return "High backlog";
+    return "Backlog unknown";
+}
+
+function pressureLabel(pressureState) {
+    if (pressureState === "low") return "low fee pressure";
+    if (pressureState === "normal") return "moderate fee pressure";
+    if (pressureState === "high") return "high fee pressure";
+    if (pressureState === "very_high") return "very high fee pressure";
+    return "fee pressure unknown";
+}
+
+function mempoolExplainText(backlogState, pressureState) {
+    const head = `${backlogLabel(backlogState)}, ${pressureLabel(pressureState)}.`;
+
+    // 3x4 Matrix (backlog: low/normal/high × pressure: low/normal/high/very_high)
+    if (backlogState === "low" && pressureState === "low") {
+        return `${head} Cost-saving rates are often sufficient.`;
+    }
+    if (backlogState === "low" && pressureState === "normal") {
+        return `${head} Balanced fees are usually enough; use upper range for faster confirmation.`;
+    }
+    if (backlogState === "low" && pressureState === "high") {
+        return `${head} Competition is rising; upper-range fees improve confirmation speed.`;
+    }
+    if (backlogState === "low" && pressureState === "very_high") {
+        return `${head} Short-term fee spike likely; low-fee transactions may be delayed.`;
+    }
+
+    if (backlogState === "normal" && pressureState === "low") {
+        return `${head} Conditions are relatively calm; lower fees can often work.`;
+    }
+    if (backlogState === "normal" && pressureState === "normal") {
+        return `${head} Typical market conditions; balanced fees are a solid baseline.`;
+    }
+    if (backlogState === "normal" && pressureState === "high") {
+        return `${head} Fee market is tightening; consider upper-range fees.`;
+    }
+    if (backlogState === "normal" && pressureState === "very_high") {
+        return `${head} Strong fee pressure; low-fee transactions may face long delays.`;
+    }
+
+    if (backlogState === "high" && pressureState === "low") {
+        return `${head} Queue is large but pressure is currently soft; a small safety buffer is applied.`;
+    }
+    if (backlogState === "high" && pressureState === "normal") {
+        return `${head} Backlog is elevated; upper-range fees are safer for faster confirmation.`;
+    }
+    if (backlogState === "high" && pressureState === "high") {
+        return `${head} Congested conditions; lower-fee transactions are more likely to wait longer.`;
+    }
+    if (backlogState === "high" && pressureState === "very_high") {
+        return `${head} Peak congestion; fast confirmation usually requires high fee rates.`;
+    }
+
+    return `${head} Market data is incomplete; conditions can change quickly.`;
+}
+
+function tendencyTrafficLight(modePressure, p50) {
+    const p = String(modePressure || "").toLowerCase();
+    const med = Number(p50);
+
+    if (p === "low") return { label: "🟢 Calm window", cls: "fee-pressure-low" };
+    if (p === "normal") return { label: "🟡 Normal window", cls: "fee-pressure-normal" };
+    if (p === "high") return { label: "🟠 Busy window", cls: "fee-pressure-high" };
+    if (p === "very_high") return { label: "🔴 Hot window", cls: "fee-pressure-very-high" };
+
+    // fallback via median
+    if (Number.isFinite(med)) {
+        if (med <= 5) return { label: "🟢 Calm window", cls: "fee-pressure-low" };
+        if (med <= 15) return { label: "🟡 Normal window", cls: "fee-pressure-normal" };
+        if (med <= 40) return { label: "🟠 Busy window", cls: "fee-pressure-high" };
+        return { label: "🔴 Hot window", cls: "fee-pressure-very-high" };
+    }
+
+    return { label: "⚪ Unknown window", cls: "fee-pressure-unknown" };
+}
+
+function confidenceHuman(c) {
+    const x = String(c || "").toLowerCase();
+    if (x === "high") return "high confidence";
+    if (x === "medium") return "medium confidence";
+    return "low confidence";
+}
+
+function getSuggestedRateNumber() {
+    const el = document.getElementById("suggestedFeeNow");
+    if (!el) return null;
+    const m = (el.textContent || "").match(/([0-9]+(?:\.[0-9]+)?)/);
+    return m ? Number(m[1]) : null;
+}
+
+function updateFeeCalculator() {
+    const inEl = document.getElementById("txSizeVb");
+    const outEl = document.getElementById("feeCalcResult");
+    if (!inEl || !outEl) return;
+
+    const rate = getSuggestedRateNumber();
+    const vb = Number(inEl.value);
+
+    if (!Number.isFinite(rate) || rate <= 0) {
+        outEl.textContent = "Estimated final fee: -";
+        return;
+    }
+
+    if (!Number.isFinite(vb) || vb <= 0) {
+        outEl.textContent = `Estimated final fee: enter transaction size`;
+        return;
+    }
+
+    const feeSat = Math.round(rate * vb);
+    outEl.textContent = `Estimated final fee: ${feeSat} sat`;
+}
+
+let lastSuggestedRate = null;
+
+function satToBtc(sat) {
+    return (sat / 100000000).toFixed(8);
+}
+function satToMbtc(sat) {
+    return (sat / 100000).toFixed(5);
+}
+
+function updateFeeCalculator() {
+    const inEl = document.getElementById("txSizeVb");
+    const outEl = document.getElementById("feeCalcResult");
+    if (!inEl || !outEl) return;
+
+    const rate = Number(lastSuggestedRate);
+    const vb = Number(inEl.value);
+
+    if (!Number.isFinite(rate) || rate <= 0) {
+        outEl.textContent = "Estimated network fee: -";
+        return;
+    }
+
+    if (!Number.isFinite(vb) || vb <= 0) {
+        outEl.textContent = "Estimated network fee: enter transaction size";
+        return;
+    }
+
+    const feeSat = Math.round(rate * vb);
+    outEl.textContent = `Estimated network fee: ${feeSat} sat (${satToMbtc(feeSat)} mBTC / ${satToBtc(feeSat)} BTC)`;
+}
+
+
+function syncPresetToNearest() {
+    const txInput = document.getElementById("txSizeVb");
+    const txPreset = document.getElementById("txPreset");
+    if (!txInput || !txPreset) return;
+
+    const vb = Number(txInput.value);
+    if (!Number.isFinite(vb) || vb <= 0) return;
+
+    let bestVal = null;
+    let bestDist = Infinity;
+
+    Array.from(txPreset.options).forEach(opt => {
+        const v = Number(opt.value);
+        if (!Number.isFinite(v)) return;
+        const d = Math.abs(v - vb);
+        if (d < bestDist) {
+            bestDist = d;
+            bestVal = v;
+        }
+    });
+
+    if (bestVal !== null) txPreset.value = String(bestVal);
+}
+
+function recommendTxPresetByLevel(level) {
+    if (level === "Calm") return "141";
+    if (level === "Elevated") return "220";
+    if (level === "Busy") return "220";
+    if (level === "Congested") return "320";
+    if (level === "Stressed") return "320";
+    return "220";
 }
 
 
@@ -895,29 +1150,44 @@ async function updateAll(opts = {}) {
         safeSet("srv-version", data.server_version ?? "-");
         safeSet("srv-protocol", data.protocol ?? "-");
 
-        // Fees (smoothed raw input)
-        const smoothedFees = getSmoothedFees(data.fees || {});
-        const pressureState = derivePressureState(data.fee_pressure_state, smoothedFees);
+	// Fees (smoothed raw input)
+	const smoothedFees = getSmoothedFees(data.fees || {});
+	const pressureState = derivePressureState(data.fee_pressure_state, smoothedFees);
 
 	// Suggested fee now (Hauptwert)
 	const suggested = pickSuggestedFee(st, pressureState, smoothedFees);
 
+	lastSuggestedRate = Number.isFinite(suggested) ? Number(suggested) : null;
+	updateFeeCalculator();
+
 	const suggestedEl = document.getElementById("suggestedFeeNow");
 	if (suggestedEl) {
-	    suggestedEl.textContent = Number.isFinite(suggested) ? `${fmtFee(suggested)} sat/vB` : "-";
+		if (Number.isFinite(suggested)) {
+		    suggestedEl.innerHTML = `${fmtFee(suggested)} sat/vB <span class="fee-rate-note">(Suggested fee rate)</span>`;
+		} else {
+		    suggestedEl.textContent = "-";
+		}
 	    suggestedEl.classList.remove(
 	        "fee-pressure-low",
 	        "fee-pressure-normal",
 	        "fee-pressure-high",
 	        "fee-pressure-very-high",
 	        "fee-pressure-unknown"
-	    );
+		    );
 	    suggestedEl.classList.add(suggestedToneClass(st, pressureState));
 	}
 
-	const suggestedSubEl = document.getElementById("suggestedFeeSubline");
-	if (suggestedSubEl) {
-	    suggestedSubEl.textContent = suggestedSublineText(st, pressureState);
+	// Formel dynamisch mit aktueller Suggested-Rate
+	const formulaEl = document.getElementById("suggestedFeeFormula");
+	if (formulaEl) {
+	    if (Number.isFinite(suggested)) {
+	        formulaEl.innerHTML =
+	            `Use <span class="formula-rate ${suggestedToneClass(st, pressureState)}">${fmtFee(suggested)} sat/vB</span> ` +
+	            `in your wallet’s fee settings to influence confirmation speed.`;
+	    } else {
+	        formulaEl.textContent =
+	            "Use this rate in your wallet’s fee settings (sat/vB) to influence confirmation speed.";
+	    }
 	}
 
 	// Fee hint/disclaimer (kurz)
@@ -926,25 +1196,49 @@ async function updateAll(opts = {}) {
 	    feeHintEl.textContent = "No fee level guarantees next-block confirmation. Use RBF/CPFP-capable wallets for fallback.";
 	}
 
-        // Estimated sufficient range (current)
-        const feeRangeEl = document.getElementById("feeRange");
-        if (feeRangeEl) {
-            const vals = [smoothedFees.slow, smoothedFees.medium, smoothedFees.fast]
-                .map(v => Number(v))
-                .filter(v => Number.isFinite(v) && v > 0);
+	// Current practical range (near suggestion)
+	const feeRangeEl = document.getElementById("feeRange");
+	const feeRangeHintEl = document.getElementById("feeRangeHint");
 
-            if (vals.length > 0) {
-                const min = Math.min(...vals);
-                const max = Math.max(...vals);
-                if (Math.abs(min - max) < 0.0001) {
-                    feeRangeEl.textContent = `Estimated sufficient range (current): ${fmtFee(min)} sat/vB`;
-                } else {
-                    feeRangeEl.textContent = `Estimated sufficient range (current): ${fmtFee(min)}–${fmtFee(max)} sat/vB`;
-                }
-            } else {
-                feeRangeEl.textContent = "Estimated sufficient range (current): -";
-            }
-        }
+	if (feeRangeEl) {
+	    const vals = [smoothedFees.slow, smoothedFees.medium, smoothedFees.fast]
+	        .map(v => Number(v))
+	        .filter(v => Number.isFinite(v) && v > 0);
+
+	    if (vals.length > 0) {
+	        const min = Math.min(...vals);
+	        const max = Math.max(...vals);
+
+	        const sameRange = Math.abs(min - max) < 0.0001;
+	        feeRangeEl.textContent = sameRange
+	            ? `Current practical range: about ${fmtFee(min)} sat/vB`
+	            : `Current practical range: ${fmtFee(min)}–${fmtFee(max)} sat/vB`;
+
+	        // farblich an Suggested koppeln
+	        feeRangeEl.classList.remove(
+	            "fee-pressure-low",
+	            "fee-pressure-normal",
+	            "fee-pressure-high",
+	            "fee-pressure-very-high",
+	            "fee-pressure-unknown"
+	        );
+	        feeRangeEl.classList.add(suggestedToneClass(st, pressureState));
+
+	        // kurze Logik-Erklärung
+	        if (feeRangeHintEl) {
+	            if (sameRange) {
+	                feeRangeHintEl.textContent =
+	                    "Market is narrow right now; the suggested rate is already close to the practical target.";
+	            } else {
+	                feeRangeHintEl.textContent =
+	                    `Use lower end for cost-saving, higher end for faster confirmation. Suggested now: ${Number.isFinite(suggested) ? fmtFee(suggested) : "-"} sat/vB.`;
+	            }
+	        }
+	    } else {
+	        feeRangeEl.textContent = "Current practical range: -";
+	        if (feeRangeHintEl) feeRangeHintEl.textContent = "";
+	    }
+	}
 
         // Peak (raw, outlier)
         const feePeakEl = document.getElementById("feePeak");
@@ -957,34 +1251,106 @@ async function updateAll(opts = {}) {
             }
         }
 
-        // Mempool badge
-        const mempoolEl = document.getElementById("mempoolState");
-        if (mempoolEl) {
-            const vb = Number.isFinite(Number(data.mempool_vbytes)) ? Number(data.mempool_vbytes) : null;
+	// Fee tendency
+	const tendencyEl = document.getElementById("feeTendency");
+	const tendencySubEl = document.getElementById("feeTendencySub");
 
-            mempoolEl.classList.remove("mempool-low", "mempool-normal", "mempool-high");
+	if (tendencyEl) {
+	    const n = Number(data.tendency_samples || 0);
+	    const p25 = Number(data.tendency_suggested_p25);
+	    const p50 = Number(data.tendency_suggested_p50);
+	    const p75 = Number(data.tendency_suggested_p75);
+	    const days = Number(data.tendency_window_days || 14);
 
-            let backlogLabel = "Backlog unknown";
-            if (st === "low") {
-                mempoolEl.classList.add("mempool-low");
-                backlogLabel = "Low backlog";
-            } else if (st === "normal") {
-                mempoolEl.classList.add("mempool-normal");
-                backlogLabel = "Moderate backlog";
-            } else if (st === "high") {
-                mempoolEl.classList.add("mempool-high");
-                backlogLabel = "High backlog";
-            }
+	    tendencyEl.classList.remove(
+	        "fee-pressure-low",
+	        "fee-pressure-normal",
+	        "fee-pressure-high",
+	        "fee-pressure-very-high",
+	        "fee-pressure-unknown"
+	    );
 
-            let pressureLabel = "fee pressure unknown";
-            if (pressureState === "low") pressureLabel = "low fee pressure";
-            else if (pressureState === "normal") pressureLabel = "moderate fee pressure";
-            else if (pressureState === "high") pressureLabel = "high fee pressure";
-            else if (pressureState === "very_high") pressureLabel = "very high fee pressure";
+	    if (
+	        n > 0 &&
+	        Number.isFinite(p25) &&
+	        Number.isFinite(p75)
+	    ) {
+	        const traffic = tendencyTrafficLight(data.tendency_mode_pressure, p50);
+	        tendencyEl.classList.add(traffic.cls);
+		const sameRange = Math.abs(p25 - p75) < 0.0001;
+		const rangeTxt = sameRange
+		    ? `about ${fmtFee(p25)} sat/vB`
+		    : `${fmtFee(p25)}–${fmtFee(p75)} sat/vB`;
 
-            const vbTxt = vb !== null ? ` • ${fmtVbytes(vb)}` : "";
-            mempoolEl.textContent = `Mempool: ${backlogLabel}, ${pressureLabel}${vbTxt}`;
-        }
+		tendencyEl.innerHTML = `<span class="t-label">Fee tendency (${days}d): ${traffic.label}</span><span class="t-range">• ${rangeTxt}</span>`;
+
+		if (tendencySubEl) {
+		    const daysObserved = Number(data.tendency_days_observed || 0);
+		    const bootstrap = !!data.tendency_bootstrap;
+
+		    let sub =
+		        `Usually around ${Number.isFinite(p50) ? fmtFee(p50) : "-"} sat/vB ` +
+		        `at this hour (${confidenceHuman(data.tendency_confidence)}, n=${n}).`;
+
+		    if (bootstrap) {
+		        sub += ` Learning phase: ${daysObserved}/${days} days collected; confidence improves as matching hour-slots accumulate.`;
+		    }
+
+		    tendencySubEl.textContent = sub;
+		}
+		} else {
+		    tendencyEl.classList.add("fee-pressure-unknown");
+		    tendencyEl.textContent = `Fee tendency (${days}d): not enough data yet`;
+
+		    if (tendencySubEl) {
+		        const daysObserved = Number(data.tendency_days_observed || 0);
+		        const bootstrap = !!data.tendency_bootstrap;
+
+		        tendencySubEl.textContent = bootstrap
+		            ? `Collecting historical samples for this hour-slot (${daysObserved}/${days} days).`
+		            : "Collecting historical samples for this time window.";
+		    }
+		}
+	}
+
+
+	// Mempool badge (compact) + explain line
+	const mempoolEl = document.getElementById("mempoolState");
+	const mempoolExplainEl = document.getElementById("mempoolExplain");
+
+	if (mempoolEl) {
+	    const vb = Number.isFinite(Number(data.mempool_vbytes)) ? Number(data.mempool_vbytes) : null;
+	    const level = mempoolLevel(st, pressureState);
+
+	// Auto-preset nur solange User nichts manuell geändert hat
+	const txPreset = document.getElementById("txPreset");
+	const txInput = document.getElementById("txSizeVb");
+	const txPresetHint = document.getElementById("txPresetHint");
+
+	if (!feePresetTouched && txPreset && txInput) {
+	    const rec = recommendTxPresetByLevel(level);
+	    txPreset.value = rec;
+	    txInput.value = rec;
+	    updateFeeCalculator();
+
+	    if (txPresetHint) {
+	        txPresetHint.textContent = `Auto-selected from current mempool level: ${level}.`;
+	    }
+	} else if (txPresetHint) {
+	    txPresetHint.textContent = "Preset locked to your manual selection.";
+	}
+
+	    mempoolEl.classList.remove("mempool-low", "mempool-normal", "mempool-high");
+	    const lvlClass = mempoolLevelClass(level);
+	    if (lvlClass) mempoolEl.classList.add(lvlClass);
+
+	    const vbTxt = vb !== null ? fmtVbytes(vb) : "-";
+	    mempoolEl.textContent = `Mempool: ${vbTxt} • Level: ${level}`;
+	}
+
+	if (mempoolExplainEl) {
+	    mempoolExplainEl.textContent = mempoolExplainText(st, pressureState);
+	}
 
     } catch (e) {
         console.error("STATUS FAIL:", e);
@@ -1019,19 +1385,32 @@ async function updateAll(opts = {}) {
 	    suggestedEl.classList.add("fee-pressure-unknown");
 	}
 
-        const suggestedSubEl = document.getElementById("suggestedFeeSubline");
-        if (suggestedSubEl) suggestedSubEl.textContent = "Fee conditions unavailable.";
-
         const feeHintEl = document.getElementById("feeHint") || document.querySelector(".fee-hint");
         if (feeHintEl) {
             feeHintEl.textContent = "Higher fees are comparatively faster, but confirmation timing is not guaranteed.";
         }
 
-        const feeRangeEl = document.getElementById("feeRange");
-        if (feeRangeEl) feeRangeEl.textContent = "Estimated sufficient range (current): -";
+	lastSuggestedRate = null;
+	updateFeeCalculator();
+
+	const formulaEl = document.getElementById("suggestedFeeFormula");
+	if (formulaEl) {
+	    formulaEl.textContent = "Set this fee rate in your wallet to influence confirmation speed.";
+	}	
+
+	const feeRangeEl = document.getElementById("feeRange");
+	if (feeRangeEl) feeRangeEl.textContent = "Current practical range: -";
+
+	const feeRangeHintEl = document.getElementById("feeRangeHint");
+	if (feeRangeHintEl) feeRangeHintEl.textContent = "";
 
         const feePeakEl = document.getElementById("feePeak");
         if (feePeakEl) feePeakEl.textContent = "Observed outlier peak fee rate: -";
+
+	const tendencyEl = document.getElementById("feeTendency");
+	const tendencySubEl = document.getElementById("feeTendencySub");
+	if (tendencyEl) tendencyEl.textContent = "Fee tendency: -";
+	if (tendencySubEl) tendencySubEl.textContent = "";
 
         const blockPaceEl = document.getElementById("blockPace");
         if (blockPaceEl) {

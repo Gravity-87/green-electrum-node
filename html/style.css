@@ -400,53 +400,207 @@ hr {
 }
 
 .fee-subtitle {
-  margin-top: 3px;
+  margin-top: 10px;
   font-size: 12px;
   line-height: 1.35;
   color: rgba(255,255,255,0.72);
 }
 
+/* Section grouping */
+.fee-section + .fee-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255,255,255,0.07);
+}
+
+/* Suggested block */
 .fee-suggested-wrap {
-  display: block;
-  visibility: visible;
-  opacity: 1;
-  margin: 8px 0 10px;
+  margin: 10px 0 12px;
 }
 
 .fee-suggested-value {
-  display: block;
-  visibility: visible;
   font-size: 30px;
   font-weight: 700;
   line-height: 1.1;
   transition: color .2s ease;
 }
 
+.fee-suggested-value .fee-rate-note {
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.8;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+
 .fee-suggested-formula {
   font-size: 11px;
-  opacity: 0.78;
-  margin-top: 4px;
+  opacity: .78;
+  margin-top: 6px;
+  line-height: 1.35;
 }
 
-.fee-suggested-subline {
-  display: block;
-  visibility: visible;
-  font-size: 12px;
-  opacity: .85;
-  margin-top: 4px;
+.fee-suggested-formula .formula-rate {
+  font-weight: 700;
 }
 
+/* Shared fee tone classes */
 .fee-pressure-low       { color: #4ed440; }
 .fee-pressure-normal    { color: #f1c40f; }
 .fee-pressure-high      { color: #ff9f43; }
 .fee-pressure-very-high { color: #ff5c5c; }
 .fee-pressure-unknown   { color: #cfcfcf; }
 
+/* Range + hint near suggestion */
+.fee-range {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.fee-range-hint {
+  margin-top: 3px;
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+/* Calculator panel */
+.fee-section-estimate .fee-calc { margin-top: 0; }
+
+.fee-calc {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.03);
+  font-size: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.fee-calc-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 12px;
+  align-items: start;
+}
+
+.fee-field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.fee-field label {
+  margin: 0;
+  line-height: 1.2;
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.fee-field select,
+.fee-field input {
+  margin: 0;
+  height: 34px;
+  line-height: 1.2;
+  width: 100%;
+  max-width: 220px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.06);
+  color: #fff;
+}
+
+.fee-field-hint {
+  margin-top: 2px;
+  font-size: 10px;
+  opacity: 0.68;
+}
+
+.fee-calc-result {
+  margin-top: 2px;
+  font-weight: 600;
+}
+
+.fee-calc-hint {
+  font-size: 11px;
+  opacity: 0.72;
+}
+
+/* Context block */
+.fee-section-context { text-align: center; }
+
+.fee-tendency {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.06);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.fee-tendency .t-label { white-space: nowrap; }
+.fee-tendency .t-range { opacity: 0.95; }
+
+.fee-tendency-sub {
+  margin-top: 3px;
+  font-size: 11px;
+  opacity: 0.78;
+}
+
+.fee-peak {
+  margin-top: 10px;
+}
+
 .fee-hint {
+  margin-top: 10px;
   font-size: 11px;
   line-height: 1.35;
   opacity: 0.78;
 }
+
+.fee-disclaimer-sep hr {
+  width: 42%;
+  margin-top: 10px;
+  margin-bottom: 8px;
+}
+
+.fee-calc-details summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.9;
+  list-style: none;
+  text-align: center;
+}
+
+.fee-calc-details summary::-webkit-details-marker { display: none; }
+
+.fee-calc-details summary::before {
+  content: "▸ ";
+  opacity: 0.8;
+}
+
+.fee-calc-details[open] summary::before {
+  content: "▾ ";
+}
+
+
+/* Responsive */
+@media (max-width: 760px) {
+  .fee-calc-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 
 /* =========================
    MEMPOOL-STATE
@@ -478,6 +632,38 @@ hr {
   background: rgba(231,76,60,0.14);
   color: #ff9b8f;
 }
+
+.mempool-explain {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(255,255,255,0.78);
+}
+
+
+/* Fee tendency pill */
+.fee-tendency {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.06);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.fee-tendency .t-label {
+  white-space: nowrap;
+}
+
+.fee-tendency .t-range {
+  opacity: 0.95;
+}
+
 
 /* =========================
    BLOCK PACE
